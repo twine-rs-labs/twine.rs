@@ -3,6 +3,8 @@ import type {CoreAssetsPage} from '../bindings/CoreAssetsPage';
 import type {CoreAssetsQuery} from '../bindings/CoreAssetsQuery';
 import type {CoreBacklinksPage} from '../bindings/CoreBacklinksPage';
 import type {CoreBacklinksQuery} from '../bindings/CoreBacklinksQuery';
+import type {CoreDefinitionQuery} from '../bindings/CoreDefinitionQuery';
+import type {CoreDefinitionResult} from '../bindings/CoreDefinitionResult';
 import type {CoreContentsPage} from '../bindings/CoreContentsPage';
 import type {CoreContentsQuery} from '../bindings/CoreContentsQuery';
 import type {CoreDiagnosticsPage} from '../bindings/CoreDiagnosticsPage';
@@ -18,6 +20,8 @@ import type {CoreGraphProjectionOptions} from '../bindings/CoreGraphProjectionOp
 import type {CorePassageFacts} from '../bindings/CorePassageFacts';
 import type {CorePassageLocalFacts} from '../bindings/CorePassageLocalFacts';
 import type {CorePassageDocument} from '../bindings/CorePassageDocument';
+import type {CorePassageReferencesPage} from '../bindings/CorePassageReferencesPage';
+import type {CorePassageReferencesQuery} from '../bindings/CorePassageReferencesQuery';
 import type {CoreSourceDocument} from '../bindings/CoreSourceDocument';
 import type {CoreSearchPage} from '../bindings/CoreSearchPage';
 import type {CoreSearchQuery} from '../bindings/CoreSearchQuery';
@@ -27,6 +31,24 @@ import type {CoreStorySummary} from '../bindings/CoreStorySummary';
 import type {ProjectSnapshot} from '../bindings/ProjectSnapshot';
 import type {PassageSnapshot} from '../bindings/PassageSnapshot';
 import type {StoryCommand} from '../bindings/StoryCommand';
+import type {RefactorPlanApplyRequest} from '../bindings/RefactorPlanApplyRequest';
+import type {RefactorPlanCursor} from '../bindings/RefactorPlanCursor';
+import type {RefactorPlanDetailResult} from '../bindings/RefactorPlanDetailResult';
+import type {RefactorRuntimeState} from '../bindings/RefactorRuntimeState';
+import type {PlanPassageRenameRequest} from '../bindings/PlanPassageRenameRequest';
+import type {PlanPassageRenameBeginResult} from '../bindings/PlanPassageRenameBeginResult';
+import type {PlanPassageRenameResult} from '../bindings/PlanPassageRenameResult';
+import type {PlanProjectReplaceRequest} from '../bindings/PlanProjectReplaceRequest';
+import type {PlanProjectReplaceBeginResult} from '../bindings/PlanProjectReplaceBeginResult';
+import type {PlanProjectReplaceResult} from '../bindings/PlanProjectReplaceResult';
+import type {PlanDiagnosticFixesRequest} from '../bindings/PlanDiagnosticFixesRequest';
+import type {PlanDiagnosticFixesResult} from '../bindings/PlanDiagnosticFixesResult';
+import type {RefactorPlanningTaskHandle} from '../bindings/RefactorPlanningTaskHandle';
+import {
+	isPassageRenameRequestTooLarge,
+	isProjectReplaceRequestTooLarge,
+	validateDiagnosticFixesRequest
+} from '../refactor-limits';
 import {recordPerformanceHarnessEvent} from '../../util/performance';
 import {recordCoreBridgeMetric} from './performance';
 import type {CoreBridgeMetric, CoreBridgeMode} from './performance';
@@ -40,6 +62,7 @@ import type {
 } from './twine-wasm-protocol';
 
 type PendingRequest = {
+	onWorkerMetric?: (metric: CoreBridgeMetric) => void;
 	reject: (error: Error) => void;
 	requestedAt: number;
 	requestedAtEpochMs: number;
@@ -51,11 +74,22 @@ type CacheEntry<T> = {
 	revision: number;
 };
 
+export type WorkerMemoryObservation = {
+	wasmMemoryBytes: number;
+	workerRespondedAtEpochMs: number;
+	/** Chromium's worker `performance.memory`; diagnostic-only when available. */
+	workerJsHeapUsedBytes?: number;
+};
+
 type SessionMutationKind =
 	| 'acknowledgeSaved'
 	| 'apply'
+	| 'applyRefactorPlan'
+	| 'planDiagnosticFixes'
+	| 'syncRefactorRuntime'
 	| 'beginProjectBootstrap'
 	| 'appendProjectBootstrap'
+	| 'abortProjectBootstrap'
 	| 'finishProjectBootstrap'
 	| 'ingestExternalDelta'
 	| 'redo'
@@ -74,6 +108,8 @@ type ReadModelWorkerRequest = Extract<
 			| 'queryPassageFacts'
 			| 'queryPassageLocalFacts'
 			| 'queryBacklinksPage'
+			| 'queryPassageReferencesPage'
+			| 'queryDefinition'
 			| 'queryPassageDocument'
 			| 'querySourceDocument'
 			| 'querySearchPage'
@@ -139,6 +175,14 @@ function isWasmEnabled() {
 	}
 }
 
+function hasPerformanceHarnessBridge() {
+	return (
+		typeof window !== 'undefined' &&
+		!!(window as Window & {twinePerformanceNative?: unknown})
+			.twinePerformanceNative
+	);
+}
+
 function workerFailureError(response: WasmWorkerFailure) {
 	return new Error(`WASM core ${response.kind} failed: ${response.error}`);
 }
@@ -157,7 +201,10 @@ export class WasmCoreWorkerClient {
 	private lastGraphByStory = new Map<string, CacheEntry<CoreGraphProjection>>();
 	private lastReadModelDiagnostics:
 		NonNullable<CoreBridgeMetric['readModel']> | undefined;
-	private lastWasmMemoryBytes = 0;
+	// These values must always originate in the same worker response. Retaining
+	// one tuple prevents a later JS-only/WASM-only update from becoming a
+	// synthetic ownership observation.
+	private lastWorkerMemoryObservation: WorkerMemoryObservation | undefined;
 	private readModelCache = new Map<string, CacheEntry<unknown>>();
 	private readModelQueryGenerations = new Map<string, number>();
 	private nextId = 1;
@@ -218,8 +265,32 @@ export class WasmCoreWorkerClient {
 			readModel: this.lastReadModelDiagnostics,
 			readySessionCount: this.readyRevisions.size,
 			sessionQueueCount: this.sessionQueues.size,
-			wasmMemoryBytes: this.lastWasmMemoryBytes
+			wasmMemoryBytes: this.lastWorkerMemoryObservation?.wasmMemoryBytes,
+			workerJsHeapUsedBytes:
+				this.lastWorkerMemoryObservation?.workerJsHeapUsedBytes,
+			workerMemoryObservation: this.lastWorkerMemoryObservation
 		};
+	}
+
+	async performanceProbeWorkerJs(action: 'release' | 'retain', bytes?: number) {
+		if (!hasPerformanceHarnessBridge()) {
+			throw new Error(
+				'Worker JavaScript allocation probes require the TWINE_PERF harness.'
+			);
+		}
+
+		const response = await this.send({
+			action,
+			bytes,
+			id: 0,
+			kind: 'performanceProbeWorkerJs'
+		});
+
+		if (response.kind !== 'performanceProbeWorkerJs') {
+			throw new Error(`Unexpected WASM response: ${response.kind}`);
+		}
+
+		return response.result;
 	}
 
 	dispose() {
@@ -359,6 +430,25 @@ export class WasmCoreWorkerClient {
 		return response.result.status;
 	}
 
+	async abortProjectBootstrap(sessionId: string) {
+		const response = await this.enqueueMutation(
+			sessionId,
+			'abortProjectBootstrap',
+			() =>
+				this.send({
+					id: 0,
+					kind: 'abortProjectBootstrap',
+					sessionId
+				})
+		);
+		if (response.kind !== 'abortProjectBootstrap') {
+			throw new Error(`Unexpected WASM response: ${response.kind}`);
+		}
+		this.readyRevisions.delete(sessionId);
+		this.clearQueryCaches(sessionId);
+		return response.result.aborted;
+	}
+
 	async apply(
 		sessionId: string,
 		command: StoryCommand,
@@ -382,6 +472,238 @@ export class WasmCoreWorkerClient {
 
 		this.clearQueryCaches(sessionId);
 		this.readyRevisions.set(sessionId, response.result.revision);
+		return response.result;
+	}
+
+	async syncRefactorRuntime(
+		sessionId: string,
+		runtime: RefactorRuntimeState,
+		revision: number
+	): Promise<number> {
+		const response = await this.enqueueMutation(
+			sessionId,
+			'syncRefactorRuntime',
+			() =>
+				this.send({
+					id: 0,
+					kind: 'syncRefactorRuntime',
+					revision,
+					runtime,
+					sessionId
+				})
+		);
+		if (response.kind !== 'syncRefactorRuntime') {
+			throw new Error(`Unexpected WASM response: ${response.kind}`);
+		}
+		return response.result.refactorRuntimeEpoch;
+	}
+
+	async beginPassageRenamePlan(
+		sessionId: string,
+		request: PlanPassageRenameRequest,
+		refactorRuntimeEpoch: number,
+		revision: number
+	): Promise<PlanPassageRenameBeginResult> {
+		if (isPassageRenameRequestTooLarge(request)) {
+			return {
+				failure: {
+					code: 'plan-too-large',
+					message: 'Passage rename request strings exceed the 64 KiB limit.'
+				},
+				type: 'failure'
+			};
+		}
+		await this.waitForMutations(sessionId);
+		const response = await this.send({
+			id: 0,
+			kind: 'beginPassageRenamePlan',
+			refactorRuntimeEpoch,
+			request,
+			revision,
+			sessionId
+		});
+		if (response.kind !== 'beginPassageRenamePlan')
+			throw new Error(`Unexpected WASM response: ${response.kind}`);
+		return response.result;
+	}
+
+	async continuePassageRenamePlan(
+		sessionId: string,
+		task: RefactorPlanningTaskHandle
+	): Promise<PlanPassageRenameResult> {
+		await this.waitForMutations(sessionId);
+		const response = await this.send({
+			id: 0,
+			kind: 'continuePassageRenamePlan',
+			sessionId,
+			task
+		});
+		if (response.kind !== 'continuePassageRenamePlan')
+			throw new Error(`Unexpected WASM response: ${response.kind}`);
+		return response.result;
+	}
+
+	async cancelPassageRenamePlan(
+		sessionId: string,
+		task: RefactorPlanningTaskHandle
+	): Promise<boolean> {
+		const response = await this.send({
+			id: 0,
+			kind: 'cancelPassageRenamePlan',
+			sessionId,
+			task
+		});
+		if (response.kind !== 'cancelPassageRenamePlan')
+			throw new Error(`Unexpected WASM response: ${response.kind}`);
+		return response.result.cancelled;
+	}
+
+	async beginProjectReplacePlan(
+		sessionId: string,
+		request: PlanProjectReplaceRequest,
+		refactorRuntimeEpoch: number,
+		revision: number
+	): Promise<PlanProjectReplaceBeginResult> {
+		if (isProjectReplaceRequestTooLarge(request))
+			return {
+				type: 'failure',
+				failure: {
+					code: 'plan-too-large',
+					message: 'Project replace request strings exceed the 64 KiB limit.'
+				}
+			};
+		await this.waitForMutations(sessionId);
+		const response = await this.send({
+			id: 0,
+			kind: 'beginProjectReplacePlan',
+			sessionId,
+			request,
+			refactorRuntimeEpoch,
+			revision
+		});
+		if (response.kind !== 'beginProjectReplacePlan')
+			throw new Error(`Unexpected WASM response: ${response.kind}`);
+		return response.result;
+	}
+
+	async continueProjectReplacePlan(
+		sessionId: string,
+		task: RefactorPlanningTaskHandle
+	): Promise<PlanProjectReplaceResult> {
+		await this.waitForMutations(sessionId);
+		const response = await this.send({
+			id: 0,
+			kind: 'continueProjectReplacePlan',
+			sessionId,
+			task
+		});
+		if (response.kind !== 'continueProjectReplacePlan')
+			throw new Error(`Unexpected WASM response: ${response.kind}`);
+		return response.result;
+	}
+
+	async cancelProjectReplacePlan(
+		sessionId: string,
+		task: RefactorPlanningTaskHandle
+	): Promise<boolean> {
+		const response = await this.send({
+			id: 0,
+			kind: 'cancelProjectReplacePlan',
+			sessionId,
+			task
+		});
+		if (response.kind !== 'cancelProjectReplacePlan')
+			throw new Error(`Unexpected WASM response: ${response.kind}`);
+		return response.result.cancelled;
+	}
+
+	async applyRefactorPlan(
+		sessionId: string,
+		applyRequest: RefactorPlanApplyRequest,
+		refactorRuntimeEpoch: number,
+		revision: number,
+		options: {onWorkerMetric?: (metric: CoreBridgeMetric) => void} = {}
+	) {
+		const response = await this.enqueueMutation(
+			sessionId,
+			'applyRefactorPlan',
+			() =>
+				this.send(
+					{
+						applyRequest,
+						id: 0,
+						kind: 'applyRefactorPlan',
+						refactorRuntimeEpoch,
+						revision,
+						sessionId
+					},
+					options
+				)
+		);
+
+		if (response.kind !== 'applyRefactorPlan') {
+			throw new Error(`Unexpected WASM response: ${response.kind}`);
+		}
+		if (response.result.type === 'applied') {
+			this.clearQueryCaches(sessionId);
+			this.readyRevisions.set(sessionId, response.result.revision);
+		}
+		return response.result;
+	}
+
+	async planDiagnosticFixes(
+		sessionId: string,
+		request: PlanDiagnosticFixesRequest,
+		refactorRuntimeEpoch: number,
+		revision: number,
+		options?: {onWorkerMetric?: (metric: CoreBridgeMetric) => void}
+	): Promise<PlanDiagnosticFixesResult> {
+		const validation = validateDiagnosticFixesRequest(request);
+		if (!validation.valid)
+			return {
+				failure: {
+					code: validation.code,
+					message:
+						validation.code === 'selection-too-large'
+							? 'Diagnostic fix selection exceeds the 50,000 ID or 4 MiB limit.'
+							: 'Diagnostic fix request is invalid.'
+				},
+				type: 'failure'
+			};
+		await this.waitForMutations(sessionId);
+		const workerRequest = {
+			id: 0,
+			kind: 'planDiagnosticFixes',
+			refactorRuntimeEpoch,
+			request: validation.request,
+			revision,
+			sessionId
+		} as const;
+		const response = options
+			? await this.send(workerRequest, options)
+			: await this.send(workerRequest);
+		if (response.kind !== 'planDiagnosticFixes')
+			throw new Error(`Unexpected WASM response: ${response.kind}`);
+		return response.result;
+	}
+
+	async queryRefactorPlanDetail(
+		sessionId: string,
+		cursor: RefactorPlanCursor,
+		revision: number
+	): Promise<RefactorPlanDetailResult> {
+		await this.waitForMutations(sessionId);
+		const response = await this.send({
+			cursor,
+			id: 0,
+			kind: 'queryRefactorPlanDetail',
+			revision,
+			sessionId
+		});
+
+		if (response.kind !== 'queryRefactorPlanDetail') {
+			throw new Error(`Unexpected WASM response: ${response.kind}`);
+		}
 		return response.result;
 	}
 
@@ -817,6 +1139,49 @@ export class WasmCoreWorkerClient {
 		);
 	}
 
+	async queryPassageReferencesPage(
+		sessionId: string,
+		storyId: string,
+		passageId: string,
+		options: CorePassageReferencesQuery,
+		revision: number
+	) {
+		return this.queryReadModel<CorePassageReferencesPage>(
+			sessionId,
+			storyId,
+			revision,
+			{
+				id: 0,
+				kind: 'queryPassageReferencesPage',
+				options,
+				passageId,
+				revision,
+				sessionId,
+				storyId
+			}
+		);
+	}
+
+	async queryDefinition(
+		sessionId: string,
+		query: CoreDefinitionQuery,
+		revision: number
+	) {
+		return this.queryReadModel<CoreDefinitionResult>(
+			sessionId,
+			query.storyId,
+			revision,
+			{
+				id: 0,
+				kind: 'queryDefinition',
+				query,
+				revision,
+				sessionId,
+				storyId: query.storyId
+			}
+		);
+	}
+
 	async queryPassageDocument(
 		sessionId: string,
 		storyId: string,
@@ -1062,20 +1427,22 @@ export class WasmCoreWorkerClient {
 		this.pending.delete(response.id);
 
 		if (!response.ok) {
-			this.recordMetric(
+			const metric = this.recordMetric(
 				response,
 				pending.requestedAt,
 				pending.requestedAtEpochMs
 			);
+			if (metric) pending.onWorkerMetric?.(metric);
 			pending.reject(workerFailureError(response));
 			return;
 		}
 
-		this.recordMetric(
+		const metric = this.recordMetric(
 			response,
 			pending.requestedAt,
 			pending.requestedAtEpochMs
 		);
+		if (metric) pending.onWorkerMetric?.(metric);
 		pending.resolve(response);
 	}
 
@@ -1083,7 +1450,7 @@ export class WasmCoreWorkerClient {
 		response: WasmWorkerFailure | WasmWorkerSuccess,
 		requestedAt: number,
 		requestedAtEpochMs: number
-	) {
+	): CoreBridgeMetric | undefined {
 		const receivedAt = now();
 		const receivedAtEpochMs = epochNow();
 		const metrics = response.metrics;
@@ -1091,11 +1458,30 @@ export class WasmCoreWorkerClient {
 		if (!metrics) {
 			return;
 		}
-		this.lastWasmMemoryBytes =
-			metrics.wasmMemoryBytes ?? this.lastWasmMemoryBytes;
-		this.lastReadModelDiagnostics = metrics.readModel;
+		if (
+			typeof metrics.wasmMemoryBytes === 'number' &&
+			Number.isFinite(metrics.wasmMemoryBytes) &&
+			typeof metrics.workerRespondedAtEpochMs === 'number' &&
+			Number.isFinite(metrics.workerRespondedAtEpochMs)
+		) {
+			this.lastWorkerMemoryObservation = {
+				wasmMemoryBytes: metrics.wasmMemoryBytes,
+				workerJsHeapUsedBytes:
+					typeof metrics.workerJsHeapUsedBytes === 'number' &&
+					Number.isFinite(metrics.workerJsHeapUsedBytes)
+						? metrics.workerJsHeapUsedBytes
+						: undefined,
+				workerRespondedAtEpochMs: metrics.workerRespondedAtEpochMs
+			};
+		}
+		// Metric-only worker responses do not erase diagnostics from the most
+		// recent diagnostic-bearing response. Refactor baseline isolation relies
+		// on an explicit later empty-store diagnostic, not accidental clearing.
+		if (metrics.readModel !== undefined) {
+			this.lastReadModelDiagnostics = metrics.readModel;
+		}
 
-		recordCoreBridgeMetric({
+		const metric: CoreBridgeMetric = {
 			computeMs: metrics.computeMs,
 			computeFinishedAtEpochMs: metrics.computeFinishedAtEpochMs,
 			computeStartedAtEpochMs: metrics.computeStartedAtEpochMs,
@@ -1126,12 +1512,18 @@ export class WasmCoreWorkerClient {
 				receivedAtEpochMs - metrics.workerRespondedAtEpochMs
 			),
 			workerReceivedAtEpochMs: metrics.workerReceivedAtEpochMs,
+			workerJsHeapUsedBytes: metrics.workerJsHeapUsedBytes,
 			wasmMemoryBytes: metrics.wasmMemoryBytes,
 			workerRespondedAtEpochMs: metrics.workerRespondedAtEpochMs
-		});
+		};
+		recordCoreBridgeMetric(metric);
+		return metric;
 	}
 
-	private send(request: WasmWorkerRequest) {
+	private send(
+		request: WasmWorkerRequest,
+		metadata: {onWorkerMetric?: (metric: CoreBridgeMetric) => void} = {}
+	) {
 		if (!this.worker || this.disabledReason) {
 			return Promise.reject(
 				new Error(this.disabledReason ?? 'WASM core worker is unavailable.')
@@ -1145,6 +1537,7 @@ export class WasmCoreWorkerClient {
 
 		return new Promise<WasmWorkerSuccess>((resolve, reject) => {
 			this.pending.set(id, {
+				onWorkerMetric: metadata.onWorkerMetric,
 				reject,
 				requestedAt,
 				requestedAtEpochMs,

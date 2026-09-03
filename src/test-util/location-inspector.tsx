@@ -9,6 +9,7 @@ export const LocationInspector: React.FC = () => {
 			data-testid="location"
 			data-pathname={location.pathname}
 			data-search={location.search}
+			data-state={location.state ? JSON.stringify(location.state) : undefined}
 		/>
 	);
 };

@@ -2,7 +2,7 @@
 
 Status: current snapshot
 Owner: repository maintainers
-Last verified: 2026-08-23
+Last verified: 2026-09-03
 Source of truth: shipped code paths and passing local validation
 
 ## Practical assessment
@@ -11,11 +11,10 @@ Source of truth: shipped code paths and passing local validation
 authority. The Rust-session migration, incremental native watcher ingestion,
 and local release-mode Electron performance harness are implemented.
 
-`0.2.0-beta.2` is now the first formal public prerelease produced through the
-governed release path. The product remains prerelease software and still misses
-several large-project performance targets. The current phase is optimization,
-product depth, and post-beta release validation, not another ownership
-migration.
+`v0.2.0-beta.5` is the current tagged prerelease. The product remains prerelease
+software and still misses several large-project performance targets. The
+current phase prioritizes evidence-selected large-project performance work,
+followed by product depth and release validation.
 
 ## Implemented foundations
 
@@ -46,10 +45,13 @@ migration.
   Proof remains read-only. All 15 bundled SugarCube v2 sources from 2.31.0
   through 2.37.3 use digest-authenticated, host-owned exact admission, audited
   version profiles for four read sections, and statically plus dynamically
-  attested Restart. Packaged acceptance covers Test From Here, Paperthin Proof,
-  copied assets and byte ranges, per-origin storage and window isolation,
-  cleanup and protocol lifetime, and current-passage identity across bundled
-  Chapbook, Harlowe, Snowman, and SugarCube profile representatives.
+  attested Restart. Exact admitted Harlowe 3.3.9 exposes current passage, story
+  variables, observed temporary assignments, and visited-passage history while
+  drifted or unadmitted artifacts retain current-passage-only fallback.
+  Packaged acceptance covers Test From Here, Paperthin Proof, copied assets and
+  byte ranges, per-origin storage and window isolation, cleanup and protocol
+  lifetime, and current-passage identity across bundled Chapbook, Harlowe,
+  Snowman, and SugarCube profile representatives.
 - Rust import/export, graph, storage, search, and CLI crates.
 - Segregated local, deliberately unsigned, and signed desktop artifact profiles
   with target-native trust manifests, checksum-bound assembly, and a
@@ -58,9 +60,7 @@ migration.
   approved machine-readable plans, explicit solo-maintainer approval, a durable
   checklist, annotated tag checks, tag-triggered draft assembly, manually
   dispatched publication, retained release records, and post-publication
-  fresh-download smoke coverage. The process produced the first formal public
-  prerelease, `v0.2.0-beta.2`, on 2026-08-01 using the deliberately unsigned
-  distribution profile.
+  fresh-download smoke coverage.
 - Deterministic 10k/50k release-mode Electron benchmark fixtures and local
   machine baselines.
 - Generated bounded Rust/WASM read-model contracts for summaries, cursor pages,
@@ -69,6 +69,13 @@ migration.
 - Entity-maintained Rust read-model caches for ordinary passage text, layout,
   tag, story-source, start-passage, undo/redo, and external text changes, with
   perf-only cache-build and touched-source attribution.
+- One typed application command registry with lifecycle-scoped route and tool
+  contributions. The palette exposes current passage navigation, references,
+  rename, project find/replace, applicable diagnostic fixes, source/graph
+  reveals, and project undo/redo through the same flows as their visible
+  controls. Commands revalidate live route, selection, revision, and capability
+  state before execution, explain disabled states, unregister on route disposal,
+  and keep modal focus, editor focus, and IME composition isolated.
 - CodeMirror 6 on every active editing surface, with a bounded per-editor
   adapter for compatible Chapbook legacy modes, commands, and toolbar
   descriptors. The exact bundled Harlowe 3.3.9 format has a lazy native CM6
@@ -137,6 +144,36 @@ The complete local 10k and 50k benchmark runs verify:
   families still use scoped full indexes or broad session deltas. They are not
   part of the large-story default startup/edit/watcher path and remain targeted
   optimization work.
+- Passage rename now uses a revision-pinned, Rust-owned review plan for the
+  passage name and every detected standard Twine-link occurrence. Its detail
+  review is paged and grouped by affected passage, and confirmed apply, undo,
+  and redo remain one project transaction. Format-specific semantic references
+  are still reported as unsupported coverage and are not rewritten
+  speculatively. Find/Replace now uses the same immutable plan boundary across
+  passage names, passage text, Story JavaScript, and Story Stylesheet sources,
+  with paged details, compact exclusions, grouped name/link rewrites, stale
+  rejection, and one atomic undo transaction. Find References now pages every
+  detected standard passage-link occurrence with revision-pinned UTF-16 source
+  spans, stable result keys, explicit coverage provenance, and reveal-in-source
+  or reveal-in-graph actions. Queries and reveals cross the IME-aware editor
+  mutation barrier, and duplicate passage names produce explicit ambiguous
+  coverage rather than guessed references. Go to Definition selects a passage
+  only when its exact name has one definition; duplicate names, missing names,
+  unsupported symbol kinds, and stale revisions return typed, bounded,
+  non-guessing outcomes. The 10k/50k refactor gates now directly probe paged
+  references, cache reuse, exact definitions, response bounds, reviewed
+  diagnostic-fix planning/apply/undo, and worker-only ownership. Deterministic
+  broken-link passage creation now uses the same Rust-owned immutable plan,
+  paged detail review, stale validation, atomic apply, and single undo boundary.
+  Fix All Safe plans against the complete non-dismissed diagnostic set rather
+  than the currently loaded or filtered page, deduplicates identical creations,
+  and fails the whole request if a selected descriptor is stale, ambiguous, or
+  cannot be materialized. Rename/relink, start-passage, asset, and other fixes
+  that still require user or filesystem input remain visibly manual.
+- Format-specific definitions and references for variables, hooks, macros, and
+  custom syntax remain product-depth work. They require exact-version provider
+  contracts; unsupported formats continue to report bounded coverage rather
+  than guessing.
 - Some inherited compatibility UI remains outside the primary workbench.
 - Native Harlowe editing is intentionally exact-version: bundled Harlowe 1.2.4
   and 2.1.0, user-added Harlowe builds, and future Harlowe dialects use the
@@ -147,14 +184,15 @@ The complete local 10k and 50k benchmark runs verify:
 - The public beta is deliberately unsigned, automatic updates remain disabled,
   and trusted Windows/macOS signing still requires credentialed release-run
   evidence before a signed profile can be claimed.
-- Clean corrected-code 10k and 50k suites at `e6f5446a` completed all five
-  phases with 417/417 assertions and no edit-window long tasks. The 10k
-  evaluation passes at 24.9 ms edit-paint p95. The 50k edit result is 43.6 ms
-  p95, but its overall evaluation fails one blocking resident-memory comparison
-  by 0.36875 MiB (about 0.032% of the computed limit). This is clean complete
-  evidence of the asynchronous renderer-quiescence fix; the 50k result is not
-  eligible to replace a baseline, and the small mechanical gate miss is not a
-  claim of a significant memory regression.
+- The beta.5 comparison at `114a60ba` completed the 10k and 50k five-phase
+  suites with structural invariants intact. It recorded two marginal regression
+  threshold misses: 10k edit-paint p95 was 31.50 ms against a 30.70 ms computed
+  limit, and 50k resident-memory p50 was 1,152.44 MiB against a 1,148.54 MiB
+  computed limit. These results remain failed regression evidence rather than
+  accepted baselines. Follow-up reproduction has identified bounded owners in
+  the ordinary edit path and in the 50k safe-refactor planning/apply path;
+  performance therefore remains active until clean candidate runs pass their
+  blocking gates.
 - The user manual still contains inherited Twine task and compatibility
   chapters. Current launcher, project-folder, conflict-review, workbench,
   asset, build, Settings, and Story Formats workflows are documented.
@@ -163,6 +201,6 @@ The complete local 10k and 50k benchmark runs verify:
 
 Only unfinished outcomes belong in the active roadmap:
 
-1. [`Performance optimization`](../roadmap/performance.md)
+1. [`Performance`](../roadmap/performance.md)
 2. [`Product-depth and legacy retirement`](../roadmap/product.md)
 3. [`Post-beta release validation`](../roadmap/release.md)

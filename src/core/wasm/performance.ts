@@ -7,8 +7,18 @@ export interface CoreBridgeMetric {
 	kind:
 		| 'acknowledgeSaved'
 		| 'apply'
+		| 'applyRefactorPlan'
+		| 'planDiagnosticFixes'
+		| 'syncRefactorRuntime'
+		| 'beginPassageRenamePlan'
+		| 'continuePassageRenamePlan'
+		| 'cancelPassageRenamePlan'
+		| 'beginProjectReplacePlan'
+		| 'continueProjectReplacePlan'
+		| 'cancelProjectReplacePlan'
 		| 'appendProjectBootstrap'
 		| 'beginProjectBootstrap'
+		| 'abortProjectBootstrap'
 		| 'finishProjectBootstrap'
 		| 'ingestExternalDelta'
 		| 'queryGraphProjection'
@@ -20,12 +30,16 @@ export interface CoreBridgeMetric {
 		| 'queryPassageFacts'
 		| 'queryPassageLocalFacts'
 		| 'queryBacklinksPage'
+		| 'queryPassageReferencesPage'
+		| 'queryDefinition'
 		| 'queryPassageDocument'
+		| 'queryRefactorPlanDetail'
 		| 'querySourceDocument'
 		| 'querySearchPage'
 		| 'queryStoryIndex'
 		| 'queryStorySummary'
 		| 'queryStoryWordCount'
+		| 'performanceProbeWorkerJs'
 		| 'redo'
 		| 'removeSession'
 		| 'replaceProject'
@@ -52,6 +66,11 @@ export interface CoreBridgeMetric {
 		parsedSourceCount: number;
 		passageCount: number;
 		projectDocumentBytes: number;
+		refactorPlanningTaskBytes: number;
+		refactorPlanningTaskCount: number;
+		refactorPlanStoreBytes: number;
+		refactorPlanStoreEntryCount: number;
+		refactorPlanStoreFingerprint: string;
 		readModelCacheStoryCount: number;
 		readModelFullBuildCount: number;
 		readModelIncrementalUpdateCount: number;
@@ -67,6 +86,7 @@ export interface CoreBridgeMetric {
 	traceId?: string;
 	transferMs: number;
 	workerReceivedAtEpochMs: number;
+	workerJsHeapUsedBytes?: number;
 	workerRespondedAtEpochMs: number;
 	wasmMemoryBytes?: number;
 }

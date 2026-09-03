@@ -13,6 +13,10 @@ export const performanceFixtureVariants = {
 	}
 };
 
+// Bump whenever the fixture's measured ownership contract changes. Reports
+// produced from an earlier fixture are not comparable to this one.
+export const performanceFixtureMeasurementContractVersion = 4;
+
 export const chapbookFixtureVariableLineCount = 4096;
 
 export const performanceFixtureAssets = {
@@ -82,6 +86,7 @@ export function performanceFixtureManifest(
 			.sort()
 			.map(filename => `assets/perf/${filename}`),
 		fixtureVariant,
+		performanceFixtureMeasurementContractVersion,
 		projectPath,
 		sourcePath
 	};

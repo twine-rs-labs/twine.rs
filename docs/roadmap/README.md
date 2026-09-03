@@ -2,27 +2,32 @@
 
 Status: active
 Owner: repository maintainers
-Last verified: 2026-08-03
+Last verified: 2026-09-03
 Source of truth: unfinished repository outcomes
 
 This directory contains only unfinished work. Completed implementation plans
 move to `docs/archive/completed-plans/`; current capabilities belong in
 `docs/status/`.
 
-The `0.2.0-beta.2` public prerelease completed the first formal release
-milestone. The release roadmap now tracks only validation and distribution work
-that remains for later prereleases and stable releases.
+The completed Runtime Debugger v1 expansion, runtime controls, source/graph
+reveal, and consistent Test From Here work belong in
+[`../status/current.md`](../status/current.md), and their implementation plans
+belong in `../archive/completed-plans/`.
 
 ## Priority order
 
-1. [Exact-version Harlowe 3.3.9 debugger read support](./harlowe-debugger-exact-support.md)
-2. [Performance optimization](./performance.md)
-3. [Product depth and legacy retirement](./product.md)
-4. [Post-beta release validation](./release.md)
+1. [Performance](./performance.md)
+2. [Product depth and legacy retirement](./product.md)
+3. [Post-beta release validation](./release.md)
 
-The order is deliberate. The Rust ownership and benchmark foundations now
-exist, so profiling and measured optimization should precede another large
-architecture migration.
+Performance is an active blocking track. Marginal budget misses are not
+normalized away: they remain failed regression evidence until a clean candidate
+passes, and evidence-selected owners receive bounded optimization work.
+
+Release validation moves ahead of product work whenever a release candidate is
+being prepared. A current actionable dependency or security finding can also
+preempt product work, but the roadmap does not invent a standing release gate
+that the governed workflow does not enforce.
 
 ## Completion rule
 

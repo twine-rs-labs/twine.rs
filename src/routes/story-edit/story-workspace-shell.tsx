@@ -1,7 +1,7 @@
 import classNames from 'classnames';
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
-import {useNavigate} from 'react-router';
+import {useLocation, useNavigate} from 'react-router';
 import {
 	Badge,
 	Button,
@@ -12,6 +12,8 @@ import {
 	TablerIcon
 } from '../../components/design-system';
 import {VisibleWhitespace} from '../../components/visible-whitespace';
+import {PassageReferencesDialog} from '../../components/passage/passage-references-dialog';
+import {useAppCommandContribution} from '../../components/app-shell';
 import {
 	assetManagerViewModel,
 	contentsViewModel,
@@ -35,10 +37,16 @@ import type {PatchBatch} from '../../core/bindings/PatchBatch';
 import type {CoreStoryIndex} from '../../core/bindings/CoreStoryIndex';
 import type {CoreBacklinksPage} from '../../core/bindings/CoreBacklinksPage';
 import type {CorePassageLocalFacts} from '../../core/bindings/CorePassageLocalFacts';
+import type {CorePassageLocation} from '../../core/bindings/CorePassageLocation';
 import type {CoreWorkbenchDockModel} from '../../core/bindings/CoreWorkbenchDockModel';
-import {quickFixActionsForDiagnostic} from '../../core/quick-fix-registry';
-import type {CoreProjectHost} from '../../core/project-host';
+import {quickFixDescriptionsForDiagnostic} from '../../core/quick-fix-registry';
+import type {CoreProjectHost} from '../../core/project-host-public';
 import type {TwineElectronWindow} from '../../electron/shared';
+import type {CoreDiagnostic} from '../../core/bindings/CoreDiagnostic';
+import {
+	type WorkbenchStoryMutationBarrier,
+	workbenchBufferCoordinator
+} from '../../util/workbench-buffer-coordinator';
 import {loadProjectMetadata} from '../../store/project-metadata';
 import {
 	markProjectStoryHydration,
@@ -62,16 +70,20 @@ import {EditorDockLayout, StoryEditMode} from './workspace-state';
 import {EditorDock} from './editor-dock';
 import {EditorWindowSpec, editorWindowId} from './editor-window-spec';
 import {
+	allocateSourceNavigationFocusPreservationLease,
 	editorWindowSpecForSourceNavigationTarget,
+	releaseSourceNavigationFocusPreservationLease,
 	sourceNavigationTargetFromAssetReference,
 	sourceNavigationTargetFromContentsEntry,
 	sourceTarget
 } from './source-navigation';
+import type {SourceNavigationFocusIntent} from './source-navigation';
 import type {
 	StoryWorkbenchBottomDrawerPanel,
 	StoryWorkbenchExtensionContext,
 	StoryWorkbenchInspectorExtension
 } from './workbench-extensions';
+import {diagnosticFixReviewNavigationState} from '../diagnostics/diagnostic-fix-navigation';
 
 export interface StoryWorkspaceShellProps {
 	activeBottomDrawerPanelId?: string;
@@ -101,7 +113,16 @@ export interface StoryWorkspaceShellProps {
 	onSelectPassage: (passage: Passage) => void;
 	onTestPassage?: (passage: Passage) => void;
 	overlay?: React.ReactNode;
-	revealRequests?: Map<string, {key: number; position?: number}>;
+	revealRequests?: Map<
+		string,
+		{
+			end?: number;
+			focus?: SourceNavigationFocusIntent;
+			key: number;
+			position?: number;
+			restoreToken?: string;
+		}
+	>;
 	rightDockCollapsed: boolean;
 	searchRequests?: Map<string, {key: number; query?: string}>;
 	selectedPassageId?: string;
@@ -868,8 +889,11 @@ const Inspector: React.FC<{
 	diagnostics: DiagnosticsViewModel;
 	extensionContext: StoryWorkbenchExtensionContext;
 	extensions: readonly StoryWorkbenchInspectorExtension[];
-	host: CoreProjectHost;
 	index: CoreStoryIndex;
+	definitionStatus?: string;
+	onFindReferences: (passage: Passage) => void;
+	onGoToDefinition: (name: string) => void;
+	onOpenDiagnostics: (diagnostic: CoreDiagnostic, command: string) => void;
 	onRevealPassageInGraph: (passage: Passage) => void;
 	onSelectPassage: (passage: Passage) => void;
 	onTestPassage?: (passage: Passage) => void;
@@ -880,11 +904,14 @@ const Inspector: React.FC<{
 }> = props => {
 	const {
 		assets,
+		definitionStatus,
 		diagnostics,
 		extensionContext,
 		extensions,
-		host,
 		index,
+		onFindReferences,
+		onGoToDefinition,
+		onOpenDiagnostics,
 		onRevealPassageInGraph,
 		onSelectPassage,
 		onTestPassage,
@@ -913,19 +940,21 @@ const Inspector: React.FC<{
 
 	return (
 		<div className="story-edit-inspector">
-			{passage && onTestPassage && (
+			{passage && (
 				<section className="story-edit-inspector-run">
-					<Button
-						block
-						disabled={testPassagePending}
-						icon="tool"
-						loading={testPassagePendingId === passage.id}
-						onClick={() => onTestPassage(passage)}
-						size="sm"
-						variant="primary"
-					>
-						{t('routes.storyEdit.toolbar.testFromHere')}
-					</Button>
+					{onTestPassage && (
+						<Button
+							block
+							disabled={testPassagePending}
+							icon="tool"
+							loading={testPassagePendingId === passage.id}
+							onClick={() => onTestPassage(passage)}
+							size="sm"
+							variant="primary"
+						>
+							{t('routes.storyEdit.toolbar.testFromHere')}
+						</Button>
+					)}
 					<Button
 						block
 						icon="focus-2"
@@ -934,6 +963,15 @@ const Inspector: React.FC<{
 						variant="ghost"
 					>
 						{t('routes.storyEdit.workspace.revealInGraph')}
+					</Button>
+					<Button
+						block
+						icon="search"
+						onClick={() => onFindReferences(passage)}
+						size="sm"
+						variant="ghost"
+					>
+						{t('routes.storyEdit.workspace.findReferences')}
 					</Button>
 				</section>
 			)}
@@ -954,17 +992,18 @@ const Inspector: React.FC<{
 								color={linkedPassage ? 'var(--sem-link)' : 'var(--sem-error)'}
 								key={`${link.sourceId}:${link.targetName}`}
 								label={link.targetName}
-								onClick={
-									linkedPassage
-										? () => onSelectPassage(linkedPassage)
-										: undefined
-								}
-								sub={linkedPassage ? t('common.passage') : 'broken'}
+								onClick={() => onGoToDefinition(link.targetName)}
+								sub={t('routes.storyEdit.workspace.goToDefinition')}
 							/>
 						);
 					})
 				) : (
 					<OutlineItem label={t('routes.storyEdit.workspace.noLinks')} muted />
+				)}
+				{definitionStatus && (
+					<p aria-live="polite" className="story-edit-definition-status">
+						{definitionStatus}
+					</p>
 				)}
 			</OutlineSection>
 
@@ -1049,11 +1088,7 @@ const Inspector: React.FC<{
 										passage => passage.id === item.core.passageId
 									)
 								: undefined;
-							const actions = quickFixActionsForDiagnostic(
-								host,
-								story,
-								item.core
-							);
+							const actions = quickFixDescriptionsForDiagnostic(item.core);
 
 							return (
 								<div
@@ -1121,17 +1156,24 @@ const Inspector: React.FC<{
 													{t('routes.storyEdit.toolbar.testFromHere')}
 												</Button>
 											)}
-											{actions.map(action => (
-												<Button
-													disabled={!action.enabled}
-													key={action.command}
-													onClick={action.apply}
-													size="sm"
-													variant="ghost"
-												>
-													{action.title}
-												</Button>
-											))}
+											{actions.map(action =>
+												action.applicability === 'automatic' ? (
+													<Button
+														key={action.command}
+														onClick={() =>
+															onOpenDiagnostics(item.core, action.command)
+														}
+														size="sm"
+														variant="ghost"
+													>
+														Review {action.title}
+													</Button>
+												) : (
+													<span key={action.command}>
+														Manual: {action.title}
+													</span>
+												)
+											)}
 										</div>
 									)}
 								</div>
@@ -1350,13 +1392,87 @@ export const StoryWorkspaceShell: React.FC<
 		testPassagePendingId
 	} = props;
 	const coreProjectHost = useCoreProjectHost();
+	const location = useLocation();
 	const navigate = useNavigate();
 	const {dispatch: storiesDispatch, stories} = useStoriesContext();
 	const [patchVersion, setPatchVersion] = React.useState(0);
 	const [dismissalsVersion, setDismissalsVersion] = React.useState(0);
+	const [referenceTargetId, setReferenceTargetId] = React.useState<string>();
+	const [definitionStatus, setDefinitionStatus] = React.useState<string>();
+	const definitionRequestGeneration = React.useRef(0);
+	const referenceRevealGeneration = React.useRef(0);
+	const referenceFocusRestore = React.useRef<(() => void) | undefined>(
+		undefined
+	);
+	const pendingReferenceFocusRestore = React.useRef<
+		| {
+				end: number;
+				editorId: string;
+				focus: 'preserve';
+				passageId: string;
+				previousKey: number;
+				restoreFocus: () => void;
+				storyId: string;
+				start: number;
+				token: string;
+		  }
+		| undefined
+	>(undefined);
+	const [preserveFocusOnMount, setPreserveFocusOnMount] = React.useState<
+		{editorId: string; token: string} | undefined
+	>();
+	const semanticNavigationMounted = React.useRef(true);
+	const semanticNavigationStoryId = React.useRef(story.id);
+	const referenceTargetIdRef = React.useRef(referenceTargetId);
+	if (semanticNavigationStoryId.current !== story.id) {
+		semanticNavigationStoryId.current = story.id;
+		definitionRequestGeneration.current += 1;
+		referenceRevealGeneration.current += 1;
+	}
+	referenceTargetIdRef.current = referenceTargetId;
 	const hydratingStories = React.useRef(new Set<string>());
+	const hydrationOwners = React.useRef(
+		new Map<
+			string,
+			{
+				abandoned: boolean;
+				coreLeaseAcquired: boolean;
+				coreAbortRequested: boolean;
+				coreLease?: symbol;
+				nativeHydrationId?: string;
+				phase: 'native-begin' | 'core-begin' | 'streaming';
+				tokens: Set<symbol>;
+			}
+		>()
+	);
+	const [hydrationAttempt, setHydrationAttempt] = React.useState(0);
 	const storiesRef = React.useRef(stories);
 	storiesRef.current = stories;
+	React.useEffect(() => {
+		semanticNavigationMounted.current = true;
+		return () => {
+			semanticNavigationMounted.current = false;
+			definitionRequestGeneration.current += 1;
+			referenceRevealGeneration.current += 1;
+			releasePendingReferenceFocusRestore();
+		};
+	}, []);
+	React.useEffect(() => {
+		setDefinitionStatus(undefined);
+		setReferenceTargetId(undefined);
+		referenceFocusRestore.current = undefined;
+		releasePendingReferenceFocusRestore();
+	}, [story.id]);
+	React.useEffect(() => {
+		const pending = pendingReferenceFocusRestore.current;
+
+		if (
+			pending &&
+			new URLSearchParams(location.search).get('restoreToken') !== pending.token
+		) {
+			releasePendingReferenceFocusRestore({restore: true});
+		}
+	}, [location.key, location.pathname, location.search]);
 	const highlightExtensionPassages = React.useCallback(
 		(passageIds: string[]) => {
 			const currentStory = storiesRef.current.find(
@@ -1421,11 +1537,92 @@ export const StoryWorkspaceShell: React.FC<
 		const projectRoot = projectMetadata.rootPath;
 		const hydrateKey = `${projectMetadata.rootPath}:${story.id}`;
 
-		if (!bridge || hydratingStories.current.has(hydrateKey)) {
+		if (!bridge) {
 			return;
 		}
 
+		const token = Symbol('project-hydration-owner');
+		const existingOwner = hydrationOwners.current.get(hydrateKey);
+
+		if (existingOwner) {
+			existingOwner.abandoned = false;
+			existingOwner.tokens.add(token);
+			recordPerformanceHarnessEvent('renderer-project-hydration-ownership', {
+				event: 'attached',
+				phase: existingOwner.phase,
+				rootPath: projectRoot,
+				storyId: story.id
+			});
+			return () => {
+				existingOwner.tokens.delete(token);
+				void Promise.resolve().then(() => {
+					if (existingOwner.tokens.size > 0) return;
+					existingOwner.abandoned = true;
+					if (
+						existingOwner.coreLeaseAcquired &&
+						!existingOwner.coreAbortRequested
+					) {
+						existingOwner.coreAbortRequested = true;
+						recordPerformanceHarnessEvent('renderer-project-hydration-abort', {
+							phase: existingOwner.phase,
+							rootPath: projectRoot,
+							storyId: story.id
+						});
+						void (
+							existingOwner.coreLease
+								? coreProjectHost.abortHydratedProject(
+										story.id,
+										existingOwner.coreLease
+									)
+								: coreProjectHost.abortHydratedProject(story.id)
+						).catch(() => undefined);
+					}
+				});
+			};
+		}
+
+		const owner = {
+			abandoned: false,
+			coreAbortRequested: false,
+			coreLeaseAcquired: false,
+			coreLease: undefined as symbol | undefined,
+			replacementLease: undefined as symbol | undefined,
+			phase: 'native-begin' as 'native-begin' | 'core-begin' | 'streaming',
+			nativeHydrationId: undefined as string | undefined,
+			tokens: new Set([token])
+		};
+		hydrationOwners.current.set(hydrateKey, owner);
+		const abortCoreHydration = () =>
+			owner.coreLease
+				? coreProjectHost.abortHydratedProject(story.id, owner.coreLease)
+				: coreProjectHost.abortHydratedProject(story.id);
+		const appendCoreHydration = (
+			storyId: string,
+			passages: PassageWithText[]
+		) =>
+			owner.coreLease
+				? coreProjectHost.appendHydratedProjectPassages(
+						storyId,
+						passages,
+						owner.coreLease
+					)
+				: coreProjectHost.appendHydratedProjectPassages(storyId, passages);
+		const finishCoreHydration = () =>
+			owner.coreLease
+				? coreProjectHost.finishHydratedProject(story.id, owner.coreLease)
+				: coreProjectHost.finishHydratedProject(story.id);
+		const abortProjectReplacement = () =>
+			owner.replacementLease
+				? coreProjectHost.abortProjectReplacement(
+						story.id,
+						owner.replacementLease
+					)
+				: Promise.resolve();
 		hydratingStories.current.add(hydrateKey);
+		recordPerformanceHarnessEvent('renderer-project-hydration-start', {
+			rootPath: projectRoot,
+			storyId: story.id
+		});
 		const projectStoryIds = stories
 			.filter(candidate => {
 				const metadata = loadProjectMetadata(candidate.id);
@@ -1438,29 +1635,68 @@ export const StoryWorkspaceShell: React.FC<
 				!!bridge.readProjectFolderHydrationChunk &&
 				!!bridge.finishProjectFolderHydration;
 			let result;
+			let coreHydrationComplete = false;
+			let primaryError: unknown;
+			let cleanupError: unknown;
 			let hydrationChunkCount = 0;
-			if (canStream) {
-				const start = await bridge.beginProjectFolderHydration(
-					projectRoot,
-					projectStoryIds
-				);
-				const metadataStories = start.stories.map(candidate => ({
-					...candidate,
-					passages: [] as Passage[]
-				}));
-				const metadataById = new Map(
-					metadataStories.map(candidate => [candidate.id, candidate])
-				);
-				await coreProjectHost.beginHydratedProject(story.id, start.stories);
-				let cursor = 0;
-				let done = false;
-				try {
+			try {
+				owner.replacementLease =
+					await coreProjectHost.acquireProjectReplacement(story.id);
+				if (owner.abandoned) return;
+				if (canStream) {
+					const start = await bridge.beginProjectFolderHydration(
+						projectRoot,
+						projectStoryIds
+					);
+					owner.nativeHydrationId = start.hydrationId;
+					if (owner.abandoned) return;
+					const metadataStories = start.stories.map(candidate => ({
+						...candidate,
+						passages: [] as Passage[]
+					}));
+					const metadataById = new Map(
+						metadataStories.map(candidate => [candidate.id, candidate])
+					);
+					owner.phase = 'core-begin';
+					const coreLease = await coreProjectHost.beginHydratedProject(
+						story.id,
+						start.stories,
+						owner.replacementLease
+					);
+					owner.replacementLease = undefined;
+					owner.coreLease =
+						typeof coreLease === 'symbol' ? coreLease : undefined;
+					owner.coreLeaseAcquired = true;
+					recordPerformanceHarnessEvent(
+						'renderer-project-hydration-ownership',
+						{
+							event: 'core-lease-acquired',
+							rootPath: projectRoot,
+							storyId: story.id
+						}
+					);
+					if (owner.abandoned) {
+						owner.coreAbortRequested = true;
+						recordPerformanceHarnessEvent('renderer-project-hydration-abort', {
+							phase: owner.phase,
+							rootPath: projectRoot,
+							storyId: story.id
+						});
+						await abortCoreHydration();
+						return;
+					}
+					owner.phase = 'streaming';
+					let cursor = 0;
+					let done = false;
 					while (!done) {
 						const chunk = await bridge.readProjectFolderHydrationChunk(
 							start.hydrationId,
 							cursor,
 							1000
 						);
+						if (owner.coreAbortRequested) {
+							throw new Error('Project hydration was superseded.');
+						}
 						hydrationChunkCount++;
 						const byStory = new Map<string, PassageWithText[]>();
 						for (const {passage, storyId} of chunk.passages) {
@@ -1472,100 +1708,173 @@ export const StoryWorkspaceShell: React.FC<
 							metadataById.get(storyId)?.passages.push(metadataPassage);
 						}
 						for (const [storyId, passages] of byStory) {
-							await coreProjectHost.appendHydratedProjectPassages(
-								storyId,
-								passages
-							);
+							await appendCoreHydration(storyId, passages);
+							if (owner.coreAbortRequested) {
+								throw new Error('Project hydration was superseded.');
+							}
 						}
 						cursor = chunk.nextCursor;
 						done = chunk.done;
 					}
-					await coreProjectHost.finishHydratedProject(story.id);
-				} finally {
-					await bridge.finishProjectFolderHydration(start.hydrationId);
+					await finishCoreHydration();
+					coreHydrationComplete = true;
+					if (owner.coreAbortRequested) {
+						throw new Error('Project hydration was superseded.');
+					}
+					result = {
+						...start,
+						passageTextLoaded: true,
+						stories: metadataStories
+					};
+				} else {
+					result = await bridge.hydrateProjectFolder(
+						projectRoot,
+						projectStoryIds
+					);
+					if (owner.abandoned) return;
 				}
-				result = {
-					...start,
-					passageTextLoaded: true,
-					stories: metadataStories
-				};
-			} else {
-				result = await bridge.hydrateProjectFolder(
-					projectRoot,
-					projectStoryIds
-				);
-			}
 
-			recordPerformanceHarnessEvent('native-project-hydrated', {
-				...result.loadPerformanceTimings,
-				hydrationChunkCount,
-				hydrationMode: canStream ? 'streamed' : 'full',
-				graphLayoutLoaded: result.graphLayoutLoaded,
-				passageTextLoaded: result.passageTextLoaded,
-				rootPath: result.rootPath,
-				storySourcesLoaded: result.storySourcesLoaded,
-				storyCount: result.stories.length
-			});
-			if (result.stories.length > 0) {
-				if (!canStream) {
-					await coreProjectHost.initializeHydratedProject(
-						story.id,
-						result.stories
+				recordPerformanceHarnessEvent('native-project-hydrated', {
+					...result.loadPerformanceTimings,
+					hydrationChunkCount,
+					hydrationMode: canStream ? 'streamed' : 'full',
+					graphLayoutLoaded: result.graphLayoutLoaded,
+					passageTextLoaded: result.passageTextLoaded,
+					rootPath: result.rootPath,
+					storySourcesLoaded: result.storySourcesLoaded,
+					storyCount: result.stories.length
+				});
+				if (result.stories.length > 0) {
+					if (!canStream) {
+						await coreProjectHost.initializeHydratedProject(
+							story.id,
+							result.stories,
+							owner.replacementLease
+						);
+						owner.replacementLease = undefined;
+						coreHydrationComplete = true;
+					}
+					if (owner.abandoned) return;
+					const metadataStories = result.stories.map(candidate => ({
+						...candidate,
+						passages: candidate.passages.map(passage => ({
+							...passage,
+							text: ''
+						}))
+					}));
+					const mergeStarted = performance.now();
+					const hydratedStories = mergeProjectStories(
+						storiesRef.current,
+						metadataStories,
+						{preserveExistingText: false}
+					);
+					recordPerformanceHarnessEvent('renderer-project-hydration-merged', {
+						durationMs: performance.now() - mergeStarted,
+						passageCount: hydratedStories.reduce(
+							(total, candidate) => total + candidate.passages.length,
+							0
+						)
+					});
+
+					const dispatchStarted = performance.now();
+					storiesRef.current = hydratedStories;
+					storiesDispatch({
+						state: hydratedStories,
+						type: 'init'
+					});
+					if (owner.abandoned) return;
+					recordPerformanceHarnessEvent(
+						'renderer-project-hydration-dispatched',
+						{
+							durationMs: performance.now() - dispatchStarted
+						}
+					);
+					for (const hydratedStory of result.stories) {
+						markProjectStoryHydration(hydratedStory.id, {
+							passageTextLoaded: true,
+							rootPath: projectMetadata.rootPath
+						});
+					}
+					markPerformance('all-passages-ready');
+					measurePerformance(
+						'open-to-hydrated',
+						'open-start',
+						'all-passages-ready'
 					);
 				}
-				const metadataStories = result.stories.map(candidate => ({
-					...candidate,
-					passages: candidate.passages.map(passage => ({
-						...passage,
-						text: ''
-					}))
-				}));
-				const mergeStarted = performance.now();
-				const hydratedStories = mergeProjectStories(
-					storiesRef.current,
-					metadataStories,
-					{preserveExistingText: false}
-				);
-				recordPerformanceHarnessEvent('renderer-project-hydration-merged', {
-					durationMs: performance.now() - mergeStarted,
-					passageCount: hydratedStories.reduce(
-						(total, candidate) => total + candidate.passages.length,
-						0
-					)
-				});
-
-				const dispatchStarted = performance.now();
-				storiesRef.current = hydratedStories;
-				storiesDispatch({
-					state: hydratedStories,
-					type: 'init'
-				});
-				recordPerformanceHarnessEvent('renderer-project-hydration-dispatched', {
-					durationMs: performance.now() - dispatchStarted
-				});
-				for (const hydratedStory of result.stories) {
-					markProjectStoryHydration(hydratedStory.id, {
-						passageTextLoaded: true,
-						rootPath: projectMetadata.rootPath
-					});
+			} catch (error) {
+				primaryError = error;
+			} finally {
+				try {
+					if (
+						owner.coreLeaseAcquired &&
+						!coreHydrationComplete &&
+						!owner.coreAbortRequested
+					) {
+						owner.coreAbortRequested = true;
+						recordPerformanceHarnessEvent('renderer-project-hydration-abort', {
+							phase: owner.phase,
+							rootPath: projectRoot,
+							storyId: story.id
+						});
+						await abortCoreHydration();
+					}
+					if (owner.replacementLease) {
+						await abortProjectReplacement();
+						owner.replacementLease = undefined;
+					}
+				} catch (error) {
+					cleanupError = error;
 				}
-				markPerformance('all-passages-ready');
-				measurePerformance(
-					'open-to-hydrated',
-					'open-start',
-					'all-passages-ready'
-				);
+				try {
+					if (owner.nativeHydrationId) {
+						await bridge.finishProjectFolderHydration(owner.nativeHydrationId);
+					}
+				} catch (error) {
+					cleanupError ??= error;
+				}
+				hydratingStories.current.delete(hydrateKey);
+				if (hydrationOwners.current.get(hydrateKey) === owner) {
+					hydrationOwners.current.delete(hydrateKey);
+				}
+				recordPerformanceHarnessEvent('renderer-project-hydration-terminal', {
+					abandoned: owner.abandoned,
+					coreLeaseAcquired: owner.coreLeaseAcquired,
+					rootPath: projectRoot,
+					storyId: story.id
+				});
+				if (owner.tokens.size > 0 && owner.coreAbortRequested) {
+					setHydrationAttempt(attempt => attempt + 1);
+				}
 			}
+			if (primaryError) throw primaryError;
+			if (cleanupError) throw cleanupError;
 		})().catch(error =>
 			console.warn(`Could not hydrate project folder story: ${error}`)
 		);
+		return () => {
+			owner.tokens.delete(token);
+			void Promise.resolve().then(() => {
+				if (owner.tokens.size > 0) return;
+				owner.abandoned = true;
+				if (!owner.coreLeaseAcquired || owner.coreAbortRequested) return;
+				owner.coreAbortRequested = true;
+				recordPerformanceHarnessEvent('renderer-project-hydration-abort', {
+					phase: owner.phase,
+					rootPath: projectRoot,
+					storyId: story.id
+				});
+				void abortCoreHydration().catch(() => undefined);
+			});
+		};
 	}, [
 		coreProjectHost,
 		passageTextLoaded,
 		projectMetadata,
 		stories,
 		storiesDispatch,
-		story.id
+		story.id,
+		hydrationAttempt
 	]);
 
 	React.useEffect(
@@ -1800,8 +2109,304 @@ export const StoryWorkspaceShell: React.FC<
 		[backlinkPage, dockWindows, passageFacts, selection.passage?.id, story]
 	);
 	const {t} = useTranslation();
+
+	function currentReferencePassage(location: CorePassageLocation) {
+		const currentStory = storiesRef.current.find(
+			candidate => candidate.id === location.storyId
+		);
+		if (
+			location.storyId !== story.id ||
+			location.revision !== coreProjectHost.sessionStatus(story.id).revision ||
+			location.span.encoding !== 'utf16-code-units' ||
+			!currentStory
+		) {
+			return undefined;
+		}
+
+		return currentStory.passages.find(
+			passage => passage.id === location.passageId
+		);
+	}
+
+	function releasePendingReferenceFocusRestore({
+		restore = false
+	}: {restore?: boolean} = {}) {
+		const pending = pendingReferenceFocusRestore.current;
+
+		if (!pending) {
+			return;
+		}
+
+		pendingReferenceFocusRestore.current = undefined;
+		if (semanticNavigationMounted.current) {
+			setPreserveFocusOnMount(current =>
+				current?.token === pending.token ? undefined : current
+			);
+		}
+		releaseSourceNavigationFocusPreservationLease(pending.token);
+		if (
+			restore &&
+			semanticNavigationMounted.current &&
+			semanticNavigationStoryId.current === pending.storyId
+		) {
+			pending.restoreFocus();
+		}
+	}
+
+	function closePassageReferences({
+		preservePendingFocusRestore = false
+	}: {preservePendingFocusRestore?: boolean} = {}) {
+		referenceRevealGeneration.current += 1;
+		referenceTargetIdRef.current = undefined;
+		setReferenceTargetId(undefined);
+		if (!preservePendingFocusRestore) {
+			releasePendingReferenceFocusRestore();
+		}
+		const restoreFocus = referenceFocusRestore.current;
+		referenceFocusRestore.current = undefined;
+		restoreFocus?.();
+	}
+
+	function handleLocalBufferChange() {
+		releasePendingReferenceFocusRestore();
+		if (referenceTargetIdRef.current) {
+			closePassageReferences();
+		}
+	}
+
+	function handleRevealApplied(
+		editorId: string,
+		requestKey: number,
+		restoreToken?: string
+	) {
+		const pending = pendingReferenceFocusRestore.current;
+		const request = revealRequests?.get(editorId);
+
+		if (
+			!pending ||
+			pending.storyId !== story.id ||
+			pending.editorId !== editorId ||
+			pending.editorId !==
+				editorWindowId({kind: 'passage', passageId: pending.passageId}) ||
+			request?.key !== requestKey ||
+			requestKey <= pending.previousKey ||
+			request.restoreToken !== pending.token ||
+			restoreToken !== pending.token ||
+			request.focus !== pending.focus ||
+			request.position !== pending.start ||
+			request.end !== pending.end
+		) {
+			return;
+		}
+
+		releasePendingReferenceFocusRestore();
+		pending.restoreFocus();
+	}
+
+	async function revealReference(
+		location: CorePassageLocation,
+		reveal: (sourcePassage: Passage) => void
+	) {
+		const generation = ++referenceRevealGeneration.current;
+		const requestStoryId = story.id;
+		const targetId = referenceTargetIdRef.current;
+		let barrier: WorkbenchStoryMutationBarrier | undefined;
+		try {
+			barrier =
+				await workbenchBufferCoordinator.acquireStoryMutationBarrier(
+					requestStoryId
+				);
+			const ownsRequest =
+				semanticNavigationMounted.current &&
+				semanticNavigationStoryId.current === requestStoryId &&
+				generation === referenceRevealGeneration.current &&
+				targetId !== undefined &&
+				targetId === referenceTargetIdRef.current;
+			const currentStory = storiesRef.current.find(
+				candidate => candidate.id === requestStoryId
+			);
+			const sourcePassages =
+				currentStory?.passages.filter(
+					passage => passage.id === location.passageId
+				) ?? [];
+			if (
+				!ownsRequest ||
+				!barrier.isCurrent() ||
+				location.storyId !== requestStoryId ||
+				location.revision !==
+					coreProjectHost.sessionStatus(requestStoryId).revision ||
+				location.span.encoding !== 'utf16-code-units' ||
+				!currentStory?.passages.some(passage => passage.id === targetId) ||
+				sourcePassages.length !== 1
+			) {
+				throw new Error(t('routes.storyEdit.workspace.definitionStale'));
+			}
+
+			reveal(sourcePassages[0]);
+			closePassageReferences({preservePendingFocusRestore: true});
+		} catch (reason) {
+			if (generation === referenceRevealGeneration.current) {
+				releasePendingReferenceFocusRestore({restore: true});
+				const restoreFocus = referenceFocusRestore.current;
+				referenceFocusRestore.current = undefined;
+				restoreFocus?.();
+			}
+			if (
+				reason instanceof Error &&
+				reason.message === t('routes.storyEdit.workspace.definitionStale')
+			) {
+				throw reason;
+			}
+			throw new Error(t('components.passageReferences.revealFailed'));
+		} finally {
+			barrier?.release();
+		}
+	}
+
+	function handleRevealReferenceInSource(location: CorePassageLocation) {
+		return revealReference(location, sourcePassage => {
+			const spec = {kind: 'passage' as const, passageId: sourcePassage.id};
+			const restoreFocus = referenceFocusRestore.current;
+			const editorId = editorWindowId(spec);
+			const options = {
+				endOffset: location.span.end,
+				offset: location.span.start,
+				target: {kind: 'passage' as const, passageId: sourcePassage.id}
+			};
+
+			if (restoreFocus) {
+				releasePendingReferenceFocusRestore();
+				const restoreToken = allocateSourceNavigationFocusPreservationLease();
+				pendingReferenceFocusRestore.current = {
+					end: location.span.end,
+					editorId,
+					focus: 'preserve',
+					passageId: sourcePassage.id,
+					previousKey: revealRequests?.get(editorId)?.key ?? 0,
+					restoreFocus,
+					storyId: story.id,
+					start: location.span.start,
+					token: restoreToken
+				};
+				setPreserveFocusOnMount({editorId, token: restoreToken});
+				referenceFocusRestore.current = undefined;
+				onSelectPassage(sourcePassage);
+				onOpenEditorWindow?.(spec);
+				navigate(
+					sourceTarget(story, {
+						...options,
+						focus: 'preserve',
+						restoreToken
+					})
+				);
+			} else {
+				onSelectPassage(sourcePassage);
+				onOpenEditorWindow?.(spec);
+				navigate(sourceTarget(story, options));
+			}
+		});
+	}
+
+	function handleRevealReferenceInGraph(location: CorePassageLocation) {
+		return revealReference(location, onRevealPassageInGraph);
+	}
+
+	useAppCommandContribution('story-edit.workspace', [
+		{
+			contextKey: `${story.id}:${selection.passage?.id ?? 'none'}:${coreProjectHost.sessionStatus(story.id).revision}`,
+			disabled: !selection.passage,
+			disabledReason: selection.passage
+				? undefined
+				: 'Select a passage to find references',
+			group: 'Toolbar',
+			icon: 'search',
+			id: 'story-edit.find-references',
+			label: 'Find References',
+			priority: 20,
+			run: context => {
+				if (selection.passage) {
+					referenceRevealGeneration.current += 1;
+					releasePendingReferenceFocusRestore();
+					referenceFocusRestore.current = context?.restoreFocus;
+					setReferenceTargetId(selection.passage.id);
+				}
+			}
+		}
+	]);
+
+	function handleGoToDefinition(name: string) {
+		const generation = ++definitionRequestGeneration.current;
+		const requestStoryId = story.id;
+		const expectedRevision =
+			coreProjectHost.sessionStatus(requestStoryId).revision;
+		setDefinitionStatus(undefined);
+		void coreProjectHost
+			.queryDefinitionAsync({
+				expectedRevision,
+				name,
+				storyId: requestStoryId,
+				symbolKind: 'passage'
+			})
+			.then(result => {
+				if (
+					generation !== definitionRequestGeneration.current ||
+					!semanticNavigationMounted.current ||
+					semanticNavigationStoryId.current !== requestStoryId
+				)
+					return;
+
+				switch (result.type) {
+					case 'unique': {
+						const location = result.location;
+						const passage = currentReferencePassage(location);
+						if (!passage || location.passageName !== name) {
+							setDefinitionStatus(
+								t('routes.storyEdit.workspace.definitionStale')
+							);
+							return;
+						}
+						onSelectPassage(passage);
+						return;
+					}
+					case 'ambiguous':
+						setDefinitionStatus(
+							t('routes.storyEdit.workspace.definitionAmbiguous', {
+								count: result.totalCount,
+								name
+							})
+						);
+						return;
+					case 'not_found':
+						setDefinitionStatus(
+							t('routes.storyEdit.workspace.definitionNotFound', {name})
+						);
+						return;
+					case 'unsupported':
+						setDefinitionStatus(
+							t('routes.storyEdit.workspace.definitionUnsupported')
+						);
+						return;
+					case 'stale':
+						setDefinitionStatus(
+							t('routes.storyEdit.workspace.definitionStale')
+						);
+				}
+			})
+			.catch(() => {
+				if (
+					generation === definitionRequestGeneration.current &&
+					semanticNavigationMounted.current &&
+					semanticNavigationStoryId.current === requestStoryId
+				) {
+					setDefinitionStatus(t('routes.storyEdit.workspace.definitionFailed'));
+				}
+			});
+	}
 	const showGraph = mode === 'graph' || mode === 'split';
 	const showText = mode === 'text' || mode === 'split';
+	const referenceTarget = referenceTargetId
+		? story.passages.find(passage => passage.id === referenceTargetId)
+		: undefined;
 
 	function handleOpenContentsSource(entry: ContentsViewModelEntry) {
 		if (entry.core.kind === 'variable') {
@@ -1864,6 +2469,16 @@ export const StoryWorkspaceShell: React.FC<
 				'right-dock-collapsed': rightDockCollapsed
 			})}
 		>
+			{referenceTarget && (
+				<PassageReferencesDialog
+					host={coreProjectHost}
+					onClose={closePassageReferences}
+					onRevealInGraph={handleRevealReferenceInGraph}
+					onRevealInSource={handleRevealReferenceInSource}
+					story={story}
+					target={referenceTarget}
+				/>
+			)}
 			{openProgress && <StoryOpenProgress state={openProgress} />}
 			<aside
 				aria-label={t('routes.storyEdit.workspace.leftDock')}
@@ -1934,9 +2549,12 @@ export const StoryWorkspaceShell: React.FC<
 						onChangeLayout={onChangeEditorDockLayout}
 						onClose={spec => onCloseEditorWindow?.(spec)}
 						onFocus={id => onFocusEditorWindow?.(id)}
+						onLocalBufferChange={handleLocalBufferChange}
+						onRevealApplied={handleRevealApplied}
 						onOpen={spec => onOpenEditorWindow?.(spec)}
 						onReorder={(from, to) => onReorderEditorWindows?.(from, to)}
 						onRevealPassageInGraph={onRevealPassageInGraph}
+						preserveFocusOnMount={preserveFocusOnMount}
 						onSelectPassage={onSelectPassage}
 						onTestPassage={onTestPassage}
 						revealRequests={revealRequests}
@@ -1964,11 +2582,23 @@ export const StoryWorkspaceShell: React.FC<
 				>
 					<Inspector
 						assets={assets}
+						definitionStatus={definitionStatus}
 						diagnostics={diagnostics}
 						extensionContext={extensionContext}
 						extensions={inspectorExtensions}
-						host={coreProjectHost}
 						index={index}
+						onFindReferences={passage => {
+							referenceRevealGeneration.current += 1;
+							referenceFocusRestore.current = undefined;
+							releasePendingReferenceFocusRestore();
+							setReferenceTargetId(passage.id);
+						}}
+						onGoToDefinition={handleGoToDefinition}
+						onOpenDiagnostics={(diagnostic, command) =>
+							navigate(`/stories/${story.id}/diagnostics`, {
+								state: diagnosticFixReviewNavigationState(diagnostic, command)
+							})
+						}
 						onRevealPassageInGraph={onRevealPassageInGraph}
 						onSelectPassage={onSelectPassage}
 						onTestPassage={onTestPassage}

@@ -31,12 +31,39 @@ of possible completions. To accept a passage name in the completion list, click
 or tap it. If the suggestions don't include what you want, or if you're creating
 a link to a new passage, keep typing and the completions list will disappear.
 
+## Finding References and Definitions
+
+Select a passage and choose **Find References** in the Inspector to see every
+standard passage link that targets it. Results are paged for large stories and
+include repeated links and links from the passage to itself. Choose **Reveal in
+Source** to open and select the exact link target in its source passage, or
+**Reveal in Graph** to select the source passage on the story map.
+
+The coverage notice in the results is significant. Find References recognizes
+standard Twine passage links. It does not label plain text matches as semantic
+references, and it does not infer references written in story format-specific
+syntax unless an exact provider reports them. If two passages have the same
+name, Twine reports ambiguous coverage and does not assign name-based links to
+either passage. Give the passages unique names before requesting exact
+references.
+
+Before a reference query or reveal, Twine safely synchronizes open passage
+editors. Finish an active composition or retry a failed save if synchronization
+cannot complete; Twine will not reveal a location from stale buffered text.
+
+Links in the Inspector offer **Go to Definition**. Twine follows the link only
+when exactly one passage has that name. If the name is missing or duplicated,
+Twine reports that result instead of guessing. Use **Go to Passage** when you
+want the generic passage-name search fallback.
+
 ## Renaming Links
 
 If you change your mind about a passage name, you don't need to manually edit
-links in other passages. When you [rename a passage](renaming.md), Twine will update
-links to passages for you. It won't, however, update any references to a passage
-that use story format-specific functionality, like code.
+standard links in other passages. When you [rename a passage](renaming.md),
+Twine shows every detected standard-link occurrence in a review and updates the
+reviewed links when you apply it. The coverage notice is important: references
+that use story format-specific functionality, such as code, may not be detected
+and are not changed speculatively.
 
 ## Image-Based Links
 

@@ -16,4 +16,11 @@ src/electron/main-process/native/*.node
 target/
 .local/
 .op/
-docs/screenshots/
+# Screenshot captures are local output; reusable fixtures are versioned.
+docs/screenshots/*
+!docs/screenshots/fixtures/
+docs/screenshots/fixtures/*
+!docs/screenshots/fixtures/README.md
+!docs/screenshots/fixtures/the-glass-orchard.twine.rs/
+!docs/screenshots/fixtures/the-glass-orchard.twine.rs/**
+!docs/screenshots/fixtures/sugarcube-runtime-showcase.twee

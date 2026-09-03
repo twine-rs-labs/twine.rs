@@ -1,7 +1,7 @@
 import * as React from 'react';
 import type {CorePassageDocument} from './bindings/CorePassageDocument';
 import type {CoreSourceDocument} from './bindings/CoreSourceDocument';
-import {useCoreProjectHost} from './project-host';
+import {useCoreProjectHost} from './project-host-public';
 import {recordPerformanceHarnessEvent} from '../util/performance';
 
 const maxDocumentCount = 32;

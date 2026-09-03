@@ -1,5 +1,8 @@
 #![doc = "Command, patch, transaction, and snapshot spine for the Twine core."]
 
+mod refactor;
+pub use refactor::*;
+
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque, btree_map::Entry},
@@ -21,7 +24,7 @@ use twine_model::{
     GraphLayout, GraphPosition, PROJECT_SCHEMA_VERSION, Passage, PassageId, PassageIndex,
     PassageLayout, Project, Story, StoryId,
 };
-use twine_parse::{LinkParseOptions, parse_standard_links};
+use twine_parse::{LinkParseOptions, parse_standard_link_occurrences, parse_standard_links};
 use web_atoms::{C1_REPLACEMENTS, NAMED_ENTITIES};
 use web_time::Instant;
 
@@ -40,6 +43,8 @@ const MAX_HISTORY_ENTRIES: usize = 200;
 const MAX_HISTORY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_BACKLINK_CACHE_ENTRIES: usize = 16;
 const MAX_BACKLINK_CACHE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_BACKLINK_REFERENCE_OCCURRENCES: usize = 100_000;
+const MAX_DEFINITION_AMBIGUOUS_LOCATIONS: usize = 50;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -159,6 +164,7 @@ pub enum CoreHistoryKind {
     RenamePassage,
     RenameStory,
     RenameTag,
+    Refactor,
     ReplaceAsset,
     SaveLayout,
     SetStartPassage,
@@ -566,8 +572,35 @@ pub struct CoreDiagnostic {
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/core/bindings/")]
 pub struct CoreQuickFix {
+    pub applicability: CoreQuickFixApplicability,
     pub command: String,
     pub title: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub enum CoreQuickFixApplicability {
+    Automatic,
+    Manual,
+}
+
+impl CoreQuickFix {
+    fn automatic_broken_link_create_passage(target: &str) -> Self {
+        Self {
+            applicability: CoreQuickFixApplicability::Automatic,
+            command: format!("create-passage:{target}"),
+            title: format!("Create \"{target}\""),
+        }
+    }
+
+    fn manual(command: impl Into<String>, title: impl Into<String>) -> Self {
+        Self {
+            applicability: CoreQuickFixApplicability::Manual,
+            command: command.into(),
+            title: title.into(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
@@ -1028,6 +1061,138 @@ pub struct CoreBacklinksPage {
     pub total_count: usize,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub enum CoreSourceRangeEncoding {
+    #[default]
+    Utf16CodeUnits,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreSourceSpan {
+    pub encoding: CoreSourceRangeEncoding,
+    pub end: usize,
+    pub start: usize,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreSemanticProvenance {
+    pub capability_revision: u32,
+    #[serde(default)]
+    pub format_name: Option<String>,
+    #[serde(default)]
+    pub format_version: Option<String>,
+    pub provider_identifier: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CorePassageLocation {
+    pub passage_id: String,
+    pub passage_name: String,
+    pub provenance: CoreSemanticProvenance,
+    pub result_key: String,
+    pub revision: u32,
+    pub span: CoreSourceSpan,
+    pub story_id: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CorePassageReference {
+    pub location: CorePassageLocation,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CorePassageReferencesQuery {
+    pub cursor: Option<String>,
+    #[serde(default = "default_backlinks_page_limit")]
+    pub limit: usize,
+}
+
+impl Default for CorePassageReferencesQuery {
+    fn default() -> Self {
+        Self {
+            cursor: None,
+            limit: default_backlinks_page_limit(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CorePassageReferencesPage {
+    pub coverage: CorePassageReferenceCoverage,
+    pub next_cursor: Option<String>,
+    pub passage_id: String,
+    pub references: Vec<CorePassageReference>,
+    pub revision: u32,
+    pub story_id: String,
+    pub total_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub enum CorePassageReferenceCoverage {
+    #[default]
+    StandardLinksOnly,
+    AmbiguousPassageName,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub enum CoreDefinitionSymbolKind {
+    Passage,
+    Variable,
+    Hook,
+    Macro,
+    Custom,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreDefinitionQuery {
+    pub expected_revision: u32,
+    pub story_id: String,
+    pub symbol_kind: CoreDefinitionSymbolKind,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub enum CoreDefinitionResult {
+    Unique {
+        location: CorePassageLocation,
+    },
+    Ambiguous {
+        locations: Vec<CorePassageLocation>,
+        total_count: usize,
+    },
+    NotFound,
+    Unsupported {
+        symbol_kind: CoreDefinitionSymbolKind,
+    },
+    Stale,
+}
+
 /// A revision-bound passage body. Persisted text stays session-owned; callers
 /// request only the document they are actively displaying.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
@@ -1191,6 +1356,14 @@ pub struct StoryMetadataPatch {
     pub tags: Option<Vec<String>>,
     #[serde(default)]
     pub zoom: Option<f64>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct ProjectMetadataPatch {
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 impl StoryMetadataPatch {
@@ -1830,6 +2003,10 @@ pub enum Patch {
     ProjectSnapshotReplaced {
         snapshot: ProjectSnapshot,
     },
+    ProjectMetadataUpdated {
+        changes: ProjectMetadataPatch,
+        story_id: String,
+    },
     StartPassageChanged {
         passage_id: String,
         story_id: String,
@@ -1893,6 +2070,9 @@ pub enum CoreError {
     #[error("passage not found: {0}")]
     PassageNotFound(String),
 
+    #[error("passage references exceed the supported result capacity: {0}")]
+    PassageReferencesTooLarge(String),
+
     #[error("story not found: {0}")]
     StoryNotFound(String),
 
@@ -1944,6 +2124,7 @@ enum StoryDelta {
 struct ProjectDelta {
     layout_passages: Vec<ProjectLayoutPassageDelta>,
     project_layout: Option<ProjectLayoutDelta>,
+    project_scope_story_id: Option<StoryId>,
     top_after: Option<Project>,
     top_before: Option<Project>,
     stories: Vec<StoryDelta>,
@@ -2027,6 +2208,11 @@ impl ProjectDelta {
     fn between(before: &Project, after: &Project) -> Self {
         let mut before_top = before.clone();
         let mut after_top = after.clone();
+        let project_scope_story_id = after
+            .stories
+            .first()
+            .or_else(|| before.stories.first())
+            .map(|story| story.id.clone());
         let layout_passages = before
             .layout
             .passages
@@ -2161,19 +2347,108 @@ impl ProjectDelta {
         Self {
             layout_passages,
             project_layout: None,
+            project_scope_story_id,
             top_after: top_changed.then_some(after_top),
             top_before: top_changed.then_some(before_top),
             stories,
         }
     }
 
+    fn apply_non_structural_passage_updates(&self, project: &mut Project, forward: bool) -> bool {
+        if self.top_before.is_some()
+            || self.top_after.is_some()
+            || self.project_layout.is_some()
+            || !self.layout_passages.is_empty()
+            || self.stories.is_empty()
+        {
+            return false;
+        }
+
+        let mut updates = Vec::<(usize, Story, Story, Vec<(usize, PassageId, Passage)>)>::new();
+        for delta in &self.stories {
+            let StoryDelta::Update {
+                after,
+                before,
+                passages,
+                story_id,
+            } = delta
+            else {
+                return false;
+            };
+            let mut text_shell = after.clone();
+            text_shell.script.clone_from(&before.script);
+            text_shell.stylesheet.clone_from(&before.stylesheet);
+            if text_shell != *before {
+                return false;
+            }
+            let Some(story_index) = project
+                .stories
+                .iter()
+                .position(|story| &story.id == story_id)
+            else {
+                return false;
+            };
+            let mut seen = BTreeSet::new();
+            let mut passage_updates = Vec::with_capacity(passages.len());
+
+            for passage_delta in passages {
+                let values = if forward {
+                    (&passage_delta.before, &passage_delta.after)
+                } else {
+                    (&passage_delta.after, &passage_delta.before)
+                };
+                let (Some(before), Some(after)) = values else {
+                    return false;
+                };
+                if before.index != after.index
+                    || before.value.id != passage_delta.passage_id
+                    || after.value.id != passage_delta.passage_id
+                    || !seen.insert(passage_delta.passage_id.clone())
+                    || project.stories[story_index]
+                        .passages
+                        .iter()
+                        .nth(before.index)
+                        .is_none_or(|passage| passage.id != passage_delta.passage_id)
+                {
+                    return false;
+                }
+                passage_updates.push((
+                    before.index,
+                    passage_delta.passage_id.clone(),
+                    after.value.clone(),
+                ));
+            }
+            updates.push((story_index, before.clone(), after.clone(), passage_updates));
+        }
+
+        for (story_index, before_shell, after_shell, passage_updates) in updates {
+            let story = &mut project.stories[story_index];
+            let passages = std::mem::take(&mut story.passages);
+            *story = if forward { after_shell } else { before_shell };
+            story.passages = passages;
+            for (_, passage_id, value) in passage_updates {
+                story
+                    .passage_by_id_mut(&passage_id)
+                    .expect("validated non-structural passage delta")
+                    .clone_from(&value);
+            }
+            story.passages.rebuild_name_index();
+        }
+        true
+    }
+
     fn apply(&self, project: &mut Project, forward: bool) {
+        if self.apply_non_structural_passage_updates(project, forward) {
+            return;
+        }
         if let Some(top) = if forward {
             self.top_after.as_ref()
         } else {
             self.top_before.as_ref()
         } {
+            let passage_layouts = std::mem::take(&mut project.layout.passages);
             project.layout = top.layout.clone();
+            project.layout.passages = passage_layouts;
             project.library = top.library.clone();
             project.manifest = top.manifest.clone();
         }
@@ -2327,6 +2602,28 @@ impl ProjectDelta {
 
     fn patches(&self, forward: bool) -> Vec<Patch> {
         let mut patches = Vec::new();
+
+        if let (Some(before), Some(after)) = (&self.top_before, &self.top_after) {
+            let (from, to) = if forward {
+                (before, after)
+            } else {
+                (after, before)
+            };
+            if from.manifest.name != to.manifest.name {
+                let story_id = self
+                    .project_scope_story_id
+                    .as_ref()
+                    .map(|story_id| story_id.as_ref().to_owned());
+                if let Some(story_id) = story_id {
+                    patches.push(Patch::ProjectMetadataUpdated {
+                        changes: ProjectMetadataPatch {
+                            name: Some(to.manifest.name.clone()),
+                        },
+                        story_id,
+                    });
+                }
+            }
+        }
 
         for story_delta in &self.stories {
             match story_delta {
@@ -2588,9 +2885,19 @@ struct GraphSessionCache {
 #[derive(Clone, Debug)]
 struct BacklinkCacheEntry {
     byte_size: usize,
+    reference_capacity_exceeded: bool,
+    reference_coverage: CorePassageReferenceCoverage,
+    reference_occurrences: Vec<BacklinkOccurrence>,
     revision: u64,
     source_ranks: Vec<usize>,
     target_name: String,
+}
+
+#[derive(Clone, Debug)]
+struct BacklinkOccurrence {
+    source_rank: usize,
+    target_start: usize,
+    target_end: usize,
 }
 
 /// Source-metadata-only Contents records. Building this catalog never parses a
@@ -2655,6 +2962,11 @@ pub struct CoreSessionPerformanceDiagnostics {
     pub parsed_source_count: usize,
     pub passage_count: usize,
     pub project_document_bytes: usize,
+    pub refactor_planning_task_bytes: usize,
+    pub refactor_planning_task_count: usize,
+    pub refactor_plan_store_bytes: usize,
+    pub refactor_plan_store_entry_count: usize,
+    pub refactor_plan_store_fingerprint: String,
     pub read_model_cache_story_count: usize,
     pub read_model_full_build_count: usize,
     pub read_model_incremental_update_count: usize,
@@ -2675,6 +2987,7 @@ pub struct CoreMutationStageTimings {
     pub lookup_and_delta_ms: f64,
     pub operation: String,
     pub patch_finalize_ms: f64,
+    pub project_mutation_ms: f64,
     pub read_model_ms: f64,
     pub revision: u64,
     pub savepoint_ms: f64,
@@ -2952,8 +3265,8 @@ struct CompactExternalPlan {
     project_layouts: BTreeMap<usize, GraphLayout>,
 }
 
-#[cfg(test)]
 fn diagnostic_identity(diagnostic: &CoreDiagnostic) -> String {
+    #[cfg(test)]
     DIAGNOSTIC_IDENTITY_SERIALIZATIONS.with(|count| count.set(count.get() + 1));
 
     serde_json::to_string(&(
@@ -3068,10 +3381,33 @@ pub struct ProjectSession {
     current_state_id: u64,
     next_transaction_id: u64,
     project: Project,
+    refactor_plans: refactor::RefactorPlanStore,
+    refactor_planning_tasks: refactor::RefactorPlanningTaskStore,
     redo_stack: Vec<Transaction>,
     saved_fingerprints: BTreeMap<String, u64>,
     saved_state_id: u64,
     undo_stack: Vec<Transaction>,
+    #[cfg(test)]
+    refactor_failure_injection: Option<RefactorFailureInjection>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RefactorFailureInjection {
+    Child(usize),
+    Derived(DerivedRefactorFailureStage),
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DerivedRefactorFailureStage {
+    PassageNameIndex,
+    Fingerprints,
+    GraphCache,
+    BacklinkCache,
+    ContentsCatalog,
+    AnalysisCache,
+    ReadModelCache,
 }
 
 impl ProjectSession {
@@ -3082,6 +3418,7 @@ impl ProjectSession {
         project.manifest.schema_version =
             project.manifest.schema_version.max(PROJECT_SCHEMA_VERSION);
         let saved_fingerprints = project_fingerprints(&project);
+        let refactor_plans = refactor::RefactorPlanStore::for_project(&project);
 
         Self {
             analysis_cache: BTreeMap::new(),
@@ -3108,10 +3445,14 @@ impl ProjectSession {
             current_state_id: 0,
             next_transaction_id: 1,
             project,
+            refactor_plans,
+            refactor_planning_tasks: refactor::RefactorPlanningTaskStore::default(),
             redo_stack: Vec::new(),
             saved_fingerprints,
             saved_state_id: 0,
             undo_stack: Vec::new(),
+            #[cfg(test)]
+            refactor_failure_injection: None,
         }
     }
 
@@ -3140,6 +3481,642 @@ impl ProjectSession {
 
     pub fn asset_inventory(&self) -> &[CoreAssetInventoryEntry] {
         &self.asset_inventory
+    }
+
+    pub(crate) fn plan_refactor(
+        &mut self,
+        draft: CanonicalPlanDraft,
+    ) -> Result<RefactorPlanSummary, RefactorPlanFailure> {
+        let current_revision = self.refactor_revision()?;
+        if draft.preconditions.project_revision != current_revision {
+            return Err(RefactorPlanFailure {
+                code: RefactorPlanFailureCode::StaleProjectRevision,
+                message: "Planning runtime state does not match the project revision.".into(),
+            });
+        }
+        self.refactor_plans
+            .insert(draft, &self.project, refactor::RefactorPlanClock::now())
+    }
+
+    pub fn begin_passage_rename_plan(
+        &mut self,
+        request: PlanPassageRenameRequest,
+        runtime: RefactorRuntimeState,
+    ) -> Result<RefactorPlanningTaskHandle, RefactorPlanFailure> {
+        if refactor::passage_rename_request_string_bytes(&request)
+            > refactor::MAX_PASSAGE_RENAME_REQUEST_STRING_BYTES_V1
+        {
+            return Err(RefactorPlanFailure {
+                code: RefactorPlanFailureCode::PlanTooLarge,
+                message: "Passage rename request strings exceed the 64 KiB limit.".into(),
+            });
+        }
+        let current_revision = self.refactor_revision()?;
+        if runtime.project_revision != current_revision {
+            return Err(RefactorPlanFailure {
+                code: RefactorPlanFailureCode::StaleProjectRevision,
+                message: "Planning runtime state does not match the project revision.".into(),
+            });
+        }
+        self.refactor_planning_tasks
+            .begin(request, runtime, &self.project)
+    }
+
+    pub fn continue_passage_rename_plan(
+        &mut self,
+        task: &RefactorPlanningTaskHandle,
+    ) -> PlanPassageRenameResult {
+        let current_revision = match self.refactor_revision() {
+            Ok(revision) => revision,
+            Err(failure) => return PlanPassageRenameResult::Failure { failure },
+        };
+        self.refactor_planning_tasks.continue_task(
+            &task.task_id,
+            current_revision,
+            &self.project,
+            &mut self.refactor_plans,
+            refactor::RefactorPlanClock::now(),
+        )
+    }
+
+    pub fn cancel_passage_rename_plan(&mut self, task: &RefactorPlanningTaskHandle) -> bool {
+        self.refactor_planning_tasks.cancel(&task.task_id)
+    }
+
+    pub fn begin_project_replace_plan(
+        &mut self,
+        request: PlanProjectReplaceRequest,
+        runtime: RefactorRuntimeState,
+    ) -> Result<RefactorPlanningTaskHandle, RefactorPlanFailure> {
+        let current_revision = self.refactor_revision()?;
+        if runtime.project_revision != current_revision {
+            return Err(RefactorPlanFailure {
+                code: RefactorPlanFailureCode::StaleProjectRevision,
+                message: "Planning runtime state does not match the project revision.".into(),
+            });
+        }
+        self.refactor_planning_tasks
+            .begin_project_replace(request, runtime, &self.project)
+    }
+
+    pub fn continue_project_replace_plan(
+        &mut self,
+        task: &RefactorPlanningTaskHandle,
+    ) -> PlanProjectReplaceResult {
+        match self.continue_passage_rename_plan(task) {
+            PlanPassageRenameResult::Pending { task, progress } => {
+                PlanProjectReplaceResult::Pending { task, progress }
+            }
+            PlanPassageRenameResult::Complete { summary } => {
+                PlanProjectReplaceResult::Complete { summary }
+            }
+            PlanPassageRenameResult::Cancelled => PlanProjectReplaceResult::Cancelled,
+            PlanPassageRenameResult::Failure { failure } => {
+                PlanProjectReplaceResult::Failure { failure }
+            }
+        }
+    }
+
+    pub fn cancel_project_replace_plan(&mut self, task: &RefactorPlanningTaskHandle) -> bool {
+        self.refactor_planning_tasks.cancel(&task.task_id)
+    }
+
+    /// Produces an opaque Rust-owned refactor plan for the current automatic
+    /// diagnostic fixes. Request commands are descriptive selectors only and
+    /// are matched against the current read model before materialization.
+    pub fn plan_diagnostic_fixes(
+        &mut self,
+        request: PlanDiagnosticFixesRequest,
+        runtime: RefactorRuntimeState,
+    ) -> PlanDiagnosticFixesResult {
+        let result = (|| {
+            let current_revision = self.refactor_revision()?;
+            if runtime.project_revision != current_revision {
+                return Err(RefactorPlanFailure {
+                    code: RefactorPlanFailureCode::StaleProjectRevision,
+                    message: "Planning runtime state does not match the project revision.".into(),
+                });
+            }
+
+            let request_bytes = serde_json::to_vec(&request)
+                .map_err(|_| diagnostic_fix_invalid_plan("Diagnostic fix request is invalid."))?
+                .len();
+            if request_bytes > MAX_REFACTOR_SELECTION_BYTES {
+                return Err(RefactorPlanFailure {
+                    code: RefactorPlanFailureCode::SelectionTooLarge,
+                    message: "Diagnostic fix request exceeds the 4 MiB limit.".into(),
+                });
+            }
+
+            let selected_id_count = match &request.selection {
+                PlanDiagnosticFixesSelection::Only { fixes } => fixes.len(),
+                PlanDiagnosticFixesSelection::AllSafe {
+                    excluded_diagnostic_ids,
+                } => excluded_diagnostic_ids.len(),
+            };
+            if selected_id_count > MAX_REFACTOR_SELECTION_IDS {
+                return Err(RefactorPlanFailure {
+                    code: RefactorPlanFailureCode::SelectionTooLarge,
+                    message: "Diagnostic fix selection exceeds the 50,000 id limit.".into(),
+                });
+            }
+
+            let diagnostics = self
+                .read_model(&request.story_id)
+                .map_err(|error| diagnostic_fix_invalid_plan(&error.to_string()))?
+                .diagnostics
+                .clone();
+            let story = self
+                .story(&request.story_id)
+                .map_err(|error| diagnostic_fix_invalid_plan(&error.to_string()))?
+                .clone();
+            let selected = match &request.selection {
+                PlanDiagnosticFixesSelection::Only { fixes } => {
+                    if fixes.is_empty() {
+                        return Err(diagnostic_fix_invalid_plan(
+                            "Diagnostic fix selection must not be empty.",
+                        ));
+                    }
+                    let mut seen = BTreeSet::new();
+                    let mut selected = Vec::with_capacity(fixes.len());
+                    for fix in fixes {
+                        if !seen.insert(fix.clone()) {
+                            return Err(diagnostic_fix_invalid_plan(
+                                "Diagnostic fix selections must be unique.",
+                            ));
+                        }
+                        let matching_diagnostics = diagnostics
+                            .iter()
+                            .filter(|diagnostic| {
+                                diagnostic_identity(diagnostic) == fix.diagnostic_id
+                            })
+                            .collect::<Vec<_>>();
+                        let [diagnostic] = matching_diagnostics.as_slice() else {
+                            return Err(diagnostic_fix_invalid_plan(
+                                "Diagnostic fix selection is stale, unknown, or ambiguous.",
+                            ));
+                        };
+                        let matching_quick_fixes = diagnostic
+                            .quick_fixes
+                            .iter()
+                            .filter(|quick_fix| quick_fix.command == fix.quick_fix_command)
+                            .collect::<Vec<_>>();
+                        let [quick_fix] = matching_quick_fixes.as_slice() else {
+                            return Err(diagnostic_fix_invalid_plan(
+                                "Diagnostic quick-fix selection is stale, unknown, or ambiguous.",
+                            ));
+                        };
+                        if quick_fix.applicability != CoreQuickFixApplicability::Automatic {
+                            return Err(diagnostic_fix_invalid_plan(
+                                "Diagnostic quick-fix selection is not automatic.",
+                            ));
+                        }
+                        selected.push((*diagnostic, *quick_fix));
+                    }
+                    selected
+                }
+                PlanDiagnosticFixesSelection::AllSafe {
+                    excluded_diagnostic_ids,
+                } => {
+                    let excluded = excluded_diagnostic_ids.iter().collect::<BTreeSet<_>>();
+                    diagnostics
+                        .iter()
+                        .filter(|diagnostic| !excluded.contains(&diagnostic_identity(diagnostic)))
+                        .flat_map(|diagnostic| {
+                            diagnostic
+                                .quick_fixes
+                                .iter()
+                                .filter(move |quick_fix| {
+                                    quick_fix.applicability == CoreQuickFixApplicability::Automatic
+                                })
+                                .map(move |quick_fix| (diagnostic, quick_fix))
+                        })
+                        .collect()
+                }
+            };
+
+            let mut targets = BTreeSet::new();
+            let mut changes = Vec::new();
+            for (_diagnostic, quick_fix) in selected {
+                let target = automatic_broken_link_target(quick_fix).ok_or_else(|| {
+                    diagnostic_fix_invalid_plan(
+                        "Automatic diagnostic quick-fix cannot be materialized.",
+                    )
+                })?;
+                if !targets.insert(target.to_owned()) {
+                    continue;
+                }
+                let passage = Passage {
+                    custom_attributes: BTreeMap::new(),
+                    id: PassageId::new(next_diagnostic_fix_passage_id(&story, &changes)),
+                    layout: None,
+                    metadata: BTreeMap::new(),
+                    name: target.to_owned(),
+                    source_pid: None,
+                    story: story.id.clone(),
+                    tags: Vec::new(),
+                    text: String::new(),
+                };
+                changes.push(CanonicalPlanDraftChange {
+                    key: format!("diagnostic-fix-{:08}", changes.len()),
+                    group_key: None,
+                    dependencies: Vec::new(),
+                    change: CanonicalPlanChange::AddPassage {
+                        story_id: story.id.as_ref().to_owned(),
+                        passage,
+                        layout: None,
+                    },
+                });
+            }
+            if changes.is_empty() {
+                return Err(diagnostic_fix_invalid_plan(
+                    "Diagnostic fix selection does not produce any changes.",
+                ));
+            }
+            self.plan_refactor(CanonicalPlanDraft {
+                operation_kind: "diagnostic-fixes".into(),
+                coverage: "deterministic-safe-fixes".into(),
+                preconditions: runtime,
+                changes,
+            })
+        })();
+
+        match result {
+            Ok(summary) => PlanDiagnosticFixesResult::Complete { summary },
+            Err(failure) => PlanDiagnosticFixesResult::Failure { failure },
+        }
+    }
+
+    pub fn refactor_plan_detail_page(
+        &mut self,
+        cursor: &RefactorPlanCursor,
+    ) -> Result<RefactorPlanDetailPage, RefactorPlanFailure> {
+        self.refactor_plans
+            .detail_page(cursor, refactor::RefactorPlanClock::now())
+    }
+
+    pub fn apply_refactor_plan(
+        &mut self,
+        request: &RefactorPlanApplyRequest,
+        runtime: &RefactorRuntimeState,
+    ) -> Result<PatchBatch, RefactorPlanFailure> {
+        self.apply_refactor_plan_with_receipt(request, runtime)
+            .map(|(batch, _)| batch)
+    }
+
+    pub fn apply_refactor_plan_with_receipt(
+        &mut self,
+        request: &RefactorPlanApplyRequest,
+        runtime: &RefactorRuntimeState,
+    ) -> Result<(PatchBatch, RefactorApplyReceipt), RefactorPlanFailure> {
+        self.last_mutation_stage_timings = None;
+        let total_started = Instant::now();
+        let mut timings = CoreMutationStageTimings {
+            delta_id: request.plan_id.clone(),
+            operation: "refactorPlan".into(),
+            ..CoreMutationStageTimings::default()
+        };
+        let current_revision = self.refactor_revision()?;
+        if runtime.project_revision != current_revision {
+            return Err(RefactorPlanFailure {
+                code: RefactorPlanFailureCode::StaleProjectRevision,
+                message: "Apply runtime state does not match the project revision.".into(),
+            });
+        }
+        let prepared = self.refactor_plans.prepare_apply(
+            request,
+            runtime,
+            refactor::RefactorPlanClock::now(),
+        )?;
+        #[cfg(test)]
+        let failure_injection = self.refactor_failure_injection.take();
+        #[cfg(test)]
+        let injected_child = match failure_injection {
+            Some(RefactorFailureInjection::Child(index)) => Some(index),
+            _ => None,
+        };
+        #[cfg(test)]
+        let injected_derived = match failure_injection {
+            Some(RefactorFailureInjection::Derived(stage)) => Some(stage),
+            _ => None,
+        };
+        #[cfg(not(test))]
+        let injected_child: Option<usize> = None;
+        #[cfg(test)]
+        let mut rollback_session = injected_derived.is_some().then(|| self.clone());
+        let before = std::mem::take(&mut self.project);
+        let receipt =
+            match refactor::apply_receipt_for_changes(&before, &prepared.changes, current_revision)
+            {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    self.project = before;
+                    return Err(error);
+                }
+            };
+        let sparse_refactor_delta = match refactor::sparse_passage_rename_delta(
+            &before,
+            &prepared.operation_kind,
+            &prepared.changes,
+            injected_child,
+        ) {
+            Ok(delta) => delta,
+            Err(error) => {
+                self.project = before;
+                return Err(error);
+            }
+        };
+        let sparse_project_replace_delta = match refactor::sparse_project_replace_delta(
+            &before,
+            &prepared.operation_kind,
+            &prepared.changes,
+            injected_child,
+        ) {
+            Ok(delta) => delta,
+            Err(error) => {
+                self.project = before;
+                return Err(error);
+            }
+        };
+        timings.lookup_and_delta_ms = elapsed_ms(total_started);
+
+        let stage_started = Instant::now();
+        let (candidate, delta) = if let Some(sparse_project_replace_delta) =
+            sparse_project_replace_delta
+        {
+            let mut candidate = before;
+            let mut story_deltas = BTreeMap::<StoryId, (Story, Story, Vec<PassageDelta>)>::new();
+            for change in &sparse_project_replace_delta {
+                let story_id = StoryId::new(change.source.story_id());
+                let story_index = candidate
+                    .stories
+                    .iter()
+                    .position(|story| story.id == story_id)
+                    .expect("validated sparse project-replace story");
+                let entry = story_deltas.entry(story_id.clone()).or_insert_with(|| {
+                    let shell = story_shell_without_passages(&candidate.stories[story_index]);
+                    (shell.clone(), shell, Vec::new())
+                });
+                match &change.source {
+                    CanonicalSourceIdentity::Passage { passage_id, .. } => {
+                        let passage_id = PassageId::new(passage_id);
+                        let index = candidate.stories[story_index]
+                            .passages
+                            .rank_of(&passage_id)
+                            .expect("validated sparse project-replace passage");
+                        let before_passage = candidate.stories[story_index].passages[index].clone();
+                        let mut after_passage = before_passage.clone();
+                        after_passage.text.clone_from(&change.after);
+                        entry.2.push(PassageDelta {
+                            after: Some(IndexedPassage {
+                                index,
+                                value: after_passage.clone(),
+                            }),
+                            before: Some(IndexedPassage {
+                                index,
+                                value: before_passage,
+                            }),
+                            passage_id: passage_id.clone(),
+                        });
+                        candidate.stories[story_index]
+                            .passage_by_id_mut(&passage_id)
+                            .expect("validated sparse project-replace passage")
+                            .text
+                            .clone_from(&change.after);
+                    }
+                    CanonicalSourceIdentity::Script { .. } => {
+                        entry.1.script.clone_from(&change.after);
+                        candidate.stories[story_index]
+                            .script
+                            .clone_from(&change.after);
+                    }
+                    CanonicalSourceIdentity::Stylesheet { .. } => {
+                        entry.1.stylesheet.clone_from(&change.after);
+                        candidate.stories[story_index]
+                            .stylesheet
+                            .clone_from(&change.after);
+                    }
+                }
+            }
+            let stories = story_deltas
+                .into_iter()
+                .map(|(story_id, (before, after, passages))| StoryDelta::Update {
+                    after,
+                    before,
+                    passages,
+                    story_id,
+                })
+                .collect();
+            (
+                candidate,
+                ProjectDelta {
+                    stories,
+                    ..ProjectDelta::default()
+                },
+            )
+        } else if let Some(sparse_refactor_delta) = sparse_refactor_delta {
+            let mut candidate = before;
+            let story_id = StoryId::new(&sparse_refactor_delta[0].story_id);
+            let story_index = candidate
+                .stories
+                .iter()
+                .position(|story| story.id == story_id)
+                .expect("validated sparse refactor story");
+            let shell = story_shell_without_passages(&candidate.stories[story_index]);
+            let passage_deltas = sparse_refactor_delta
+                .iter()
+                .map(|change| PassageDelta {
+                    after: Some(IndexedPassage {
+                        index: change.index,
+                        value: change.after.clone(),
+                    }),
+                    before: Some(IndexedPassage {
+                        index: change.index,
+                        value: change.before.clone(),
+                    }),
+                    passage_id: change.passage_id.clone(),
+                })
+                .collect();
+            let story = &mut candidate.stories[story_index];
+            for change in &sparse_refactor_delta {
+                story
+                    .passage_by_id_mut(&change.passage_id)
+                    .expect("validated sparse refactor passage")
+                    .clone_from(&change.after);
+            }
+            #[cfg(test)]
+            self.fail_refactor_derived_stage(
+                injected_derived,
+                &mut rollback_session,
+                DerivedRefactorFailureStage::PassageNameIndex,
+            )?;
+            story.passages.rebuild_name_index();
+            (
+                candidate,
+                ProjectDelta {
+                    stories: vec![StoryDelta::Update {
+                        after: shell.clone(),
+                        before: shell,
+                        passages: passage_deltas,
+                        story_id,
+                    }],
+                    ..ProjectDelta::default()
+                },
+            )
+        } else {
+            let candidate = match refactor::apply_canonical_changes_with_injected_child(
+                &before,
+                &prepared.changes,
+                injected_child,
+            ) {
+                Ok(candidate) => candidate,
+                Err(error) => {
+                    self.project = before;
+                    return Err(error);
+                }
+            };
+            let delta = ProjectDelta::between(&before, &candidate);
+            (candidate, delta)
+        };
+        timings.project_mutation_ms = elapsed_ms(stage_started);
+
+        let transaction_id = self.next_transaction_id;
+        let before_state_id = self.current_state_id;
+        let dirty_before = self.dirty;
+        let label = format!("Refactor {}", prepared.operation_kind);
+        let stage_started = Instant::now();
+        let mut patches = delta.patches(true);
+        timings.patch_finalize_ms = elapsed_ms(stage_started);
+
+        let stage_started = Instant::now();
+        self.project = candidate;
+        self.next_transaction_id += 1;
+        self.current_state_id = transaction_id;
+        timings.history_ms = elapsed_ms(stage_started);
+        #[cfg(test)]
+        self.fail_refactor_derived_stage(
+            injected_derived,
+            &mut rollback_session,
+            DerivedRefactorFailureStage::Fingerprints,
+        )?;
+        let stage_started = Instant::now();
+        self.sync_fingerprints(&delta);
+        timings.fingerprint_ms = elapsed_ms(stage_started);
+
+        let stage_started = Instant::now();
+        push_dirty_patch(&mut patches, dirty_before, self.dirty);
+        timings.patch_finalize_ms += elapsed_ms(stage_started);
+        #[cfg(test)]
+        self.fail_refactor_derived_stage(
+            injected_derived,
+            &mut rollback_session,
+            DerivedRefactorFailureStage::GraphCache,
+        )?;
+        let stage_started = Instant::now();
+        self.update_graph_cache(&delta);
+        #[cfg(test)]
+        self.fail_refactor_derived_stage(
+            injected_derived,
+            &mut rollback_session,
+            DerivedRefactorFailureStage::BacklinkCache,
+        )?;
+        self.update_backlink_cache(&delta);
+        timings.graph_ms = elapsed_ms(stage_started);
+        for story_id in delta.stories.iter().map(|story_delta| match story_delta {
+            StoryDelta::Replace { story_id, .. } | StoryDelta::Update { story_id, .. } => story_id,
+        }) {
+            if let Some(graph) = self.graph_cache.get(story_id).map(|cache| &cache.graph) {
+                timings.graph_parsed_source_count += graph.last_incremental_parse_count();
+                timings.topology_changed |= graph.last_topology_changed();
+            }
+        }
+
+        let stage_started = Instant::now();
+        #[cfg(test)]
+        self.fail_refactor_derived_stage(
+            injected_derived,
+            &mut rollback_session,
+            DerivedRefactorFailureStage::ContentsCatalog,
+        )?;
+        self.update_contents_catalog_cache(&delta);
+        #[cfg(test)]
+        self.fail_refactor_derived_stage(
+            injected_derived,
+            &mut rollback_session,
+            DerivedRefactorFailureStage::AnalysisCache,
+        )?;
+        self.update_analysis_cache(&delta);
+        timings.analysis_ms = elapsed_ms(stage_started);
+
+        let stage_started = Instant::now();
+        #[cfg(test)]
+        self.fail_refactor_derived_stage(
+            injected_derived,
+            &mut rollback_session,
+            DerivedRefactorFailureStage::ReadModelCache,
+        )?;
+        self.update_read_model_cache(&delta);
+        timings.read_model_ms = elapsed_ms(stage_started);
+
+        let stage_started = Instant::now();
+        self.clear_redo();
+        self.push_undo(Transaction {
+            after_state_id: self.current_state_id,
+            assets: Vec::new(),
+            before_state_id,
+            byte_size: 0,
+            delta,
+            kind: CoreHistoryKind::Refactor,
+            label: label.clone(),
+        });
+        self.refactor_plans.remove(&prepared.plan_id);
+        timings.history_ms += elapsed_ms(stage_started);
+
+        let result = (
+            PatchBatch {
+                label,
+                patches,
+                transaction_id,
+            },
+            receipt,
+        );
+        timings.revision = self.revision();
+        timings.total_ms = elapsed_ms(total_started);
+        self.last_mutation_stage_timings = Some(timings);
+
+        Ok(result)
+    }
+
+    fn refactor_revision(&self) -> Result<u32, RefactorPlanFailure> {
+        u32::try_from(self.revision()).map_err(|_| RefactorPlanFailure {
+            code: RefactorPlanFailureCode::StaleProjectRevision,
+            message: "Project revision exceeds the v1 refactor protocol range.".into(),
+        })
+    }
+
+    #[cfg(test)]
+    fn inject_refactor_failure(&mut self, failure: RefactorFailureInjection) {
+        self.refactor_failure_injection = Some(failure);
+    }
+
+    #[cfg(test)]
+    fn fail_refactor_derived_stage(
+        &mut self,
+        injected_stage: Option<DerivedRefactorFailureStage>,
+        rollback_session: &mut Option<ProjectSession>,
+        stage: DerivedRefactorFailureStage,
+    ) -> Result<(), RefactorPlanFailure> {
+        if injected_stage == Some(stage) {
+            *self = rollback_session
+                .take()
+                .expect("derived refactor failures capture a rollback session");
+            return Err(RefactorPlanFailure {
+                code: RefactorPlanFailureCode::InvalidPlan,
+                message: format!("Injected refactor derived-stage failure: {stage:?}."),
+            });
+        }
+
+        Ok(())
     }
 
     pub fn apply(&mut self, command: StoryCommand) -> Result<PatchBatch, CoreError> {
@@ -3308,9 +4285,15 @@ impl ProjectSession {
         text: String,
         record_history: bool,
     ) -> Result<PatchBatch, CoreError> {
+        self.last_mutation_stage_timings = None;
+        let total_started = Instant::now();
         let transaction_id = self.next_transaction_id;
         let story_id = StoryId::new(story_id);
         let passage_id = PassageId::new(passage_id);
+        let mut timings = CoreMutationStageTimings {
+            operation: "localPassageText".into(),
+            ..CoreMutationStageTimings::default()
+        };
         let (
             before,
             before_index,
@@ -3322,8 +4305,7 @@ impl ProjectSession {
             let story = self.story(story_id.as_ref())?;
             let before_index = story
                 .passages
-                .iter()
-                .position(|passage| passage.id == passage_id)
+                .rank_of(&passage_id)
                 .ok_or_else(|| CoreError::PassageNotFound(passage_id.as_ref().to_owned()))?;
             let before = story
                 .passage_by_id(&passage_id)
@@ -3388,15 +4370,19 @@ impl ProjectSession {
             .iter()
             .map(|(_, passage)| passage.id.clone())
             .collect::<BTreeSet<_>>();
+        timings.lookup_and_delta_ms = elapsed_ms(total_started);
+        let stage_started = Instant::now();
         let (after_shell, passage_deltas) = {
             let story = self.story_mut(story_id.as_ref())?;
 
-            story.passages = story
-                .passages
-                .iter()
-                .filter(|passage| !orphaned_ids.contains(&passage.id))
-                .cloned()
-                .collect();
+            if !orphaned_ids.is_empty() {
+                story.passages = story
+                    .passages
+                    .iter()
+                    .filter(|passage| !orphaned_ids.contains(&passage.id))
+                    .cloned()
+                    .collect();
+            }
             let source = story
                 .passage_by_id_mut(&passage_id)
                 .expect("passage index should resolve after orphan cleanup");
@@ -3456,6 +4442,8 @@ impl ProjectSession {
 
             (story_shell_without_passages(story), passage_deltas)
         };
+        timings.project_mutation_ms = elapsed_ms(stage_started);
+        let stage_started = Instant::now();
         let delta = ProjectDelta {
             stories: vec![StoryDelta::Update {
                 after: after_shell,
@@ -3465,16 +4453,44 @@ impl ProjectSession {
             }],
             ..ProjectDelta::default()
         };
+        timings.lookup_and_delta_ms += elapsed_ms(stage_started);
         let dirty_before = self.dirty;
         let before_state_id = self.current_state_id;
 
         self.next_transaction_id += 1;
         self.current_state_id = transaction_id;
+
+        let stage_started = Instant::now();
         self.sync_fingerprints(&delta);
-        self.update_session_caches(&delta);
+        timings.fingerprint_ms = elapsed_ms(stage_started);
+
+        let stage_started = Instant::now();
+        self.update_graph_cache(&delta);
+        self.update_backlink_cache(&delta);
+        timings.graph_ms = elapsed_ms(stage_started);
+        if let Some(graph) = self.graph_cache.get(&story_id).map(|cache| &cache.graph) {
+            timings.graph_parsed_source_count = graph.last_incremental_parse_count();
+            timings.topology_changed = graph.last_topology_changed();
+        }
+
+        let stage_started = Instant::now();
+        self.update_contents_catalog_cache(&delta);
+        self.update_analysis_cache(&delta);
+        timings.analysis_ms = elapsed_ms(stage_started);
+
+        let stage_started = Instant::now();
+        self.update_read_model_cache(&delta);
+        timings.read_model_ms = elapsed_ms(stage_started);
+
+        let stage_started = Instant::now();
         self.clear_redo();
+        timings.history_ms = elapsed_ms(stage_started);
+
+        let stage_started = Instant::now();
         let mut patches = delta.patches(true);
+        timings.patch_finalize_ms = elapsed_ms(stage_started);
         if record_history {
+            let stage_started = Instant::now();
             self.push_undo(Transaction {
                 after_state_id: self.current_state_id,
                 assets: Vec::new(),
@@ -3484,14 +4500,22 @@ impl ProjectSession {
                 kind: CoreHistoryKind::EditPassage,
                 label: "Update Passage Text".into(),
             });
+            timings.history_ms += elapsed_ms(stage_started);
         }
 
+        let stage_started = Instant::now();
         push_dirty_patch(&mut patches, dirty_before, self.dirty);
-        Ok(PatchBatch {
+        timings.patch_finalize_ms += elapsed_ms(stage_started);
+        let result = PatchBatch {
             label: "Update Passage Text".into(),
             patches,
             transaction_id,
-        })
+        };
+        timings.revision = self.revision();
+        timings.total_ms = elapsed_ms(total_started);
+        self.last_mutation_stage_timings = Some(timings);
+
+        Ok(result)
     }
 
     fn apply_passage_patch_incremental(
@@ -4012,6 +5036,13 @@ impl ProjectSession {
     }
 
     pub fn performance_diagnostics(&self) -> CoreSessionPerformanceDiagnostics {
+        let (
+            refactor_plan_store_entry_count,
+            refactor_plan_store_bytes,
+            refactor_plan_store_fingerprint,
+        ) = self.refactor_plans.diagnostics();
+        let (refactor_planning_task_count, refactor_planning_task_bytes) =
+            self.refactor_planning_tasks.diagnostics();
         CoreSessionPerformanceDiagnostics {
             analysis_cache_source_count: self.analysis_cache.values().map(BTreeMap::len).sum(),
             backlink_cache_bytes: self
@@ -4050,6 +5081,11 @@ impl ProjectSession {
                             .sum::<usize>()
                 })
                 .sum::<usize>(),
+            refactor_planning_task_bytes,
+            refactor_planning_task_count,
+            refactor_plan_store_bytes,
+            refactor_plan_store_entry_count,
+            refactor_plan_store_fingerprint,
             read_model_cache_story_count: self.read_model_cache.len(),
             read_model_full_build_count: self.read_model_full_build_count,
             read_model_incremental_update_count: self.read_model_incremental_update_count,
@@ -5994,6 +7030,16 @@ impl ProjectSession {
                     .retain(|(cached_story_id, _)| cached_story_id != story_id);
                 continue;
             }
+            if self.backlink_cache.get(story_id).is_some_and(|entries| {
+                entries
+                    .values()
+                    .any(|entry| entry.reference_capacity_exceeded)
+            }) {
+                self.backlink_cache.remove(story_id);
+                self.backlink_cache_lru
+                    .retain(|(cached_story_id, _)| cached_story_id != story_id);
+                continue;
+            }
 
             let changed_source_ids = passages
                 .iter()
@@ -6027,12 +7073,25 @@ impl ProjectSession {
                     .get(story_id)
                     .expect("backlink cache exists")
                     .iter()
-                    .map(|(id, entry)| (id.clone(), entry.target_name.clone()))
+                    .map(|(id, entry)| {
+                        (
+                            id.clone(),
+                            entry.target_name.clone(),
+                            entry.reference_coverage,
+                        )
+                    })
                     .collect::<Vec<_>>();
                 let target_ids = target_entries
                     .iter()
-                    .map(|(target_id, _)| target_id.clone())
+                    .map(|(target_id, _, _)| target_id.clone())
                     .collect::<BTreeSet<_>>();
+                let reference_targets = target_entries
+                    .iter()
+                    .filter(|(_, _, coverage)| {
+                        *coverage == CorePassageReferenceCoverage::StandardLinksOnly
+                    })
+                    .map(|(target_id, target_name, _)| (target_name.clone(), target_id.clone()))
+                    .collect::<BTreeMap<_, _>>();
                 let changed_sources = changed_source_ids
                     .iter()
                     .filter_map(|source_id| {
@@ -6046,7 +7105,8 @@ impl ProjectSession {
                     .iter()
                     .map(|(rank, _)| *rank)
                     .collect::<BTreeSet<_>>();
-                let mut additions = BTreeMap::<PassageId, Vec<usize>>::new();
+                let mut additions =
+                    BTreeMap::<PassageId, (Vec<usize>, Vec<BacklinkOccurrence>, bool)>::new();
 
                 for (source_rank, source) in changed_sources {
                     for edge in passage_link_edges(story, source) {
@@ -6054,14 +7114,39 @@ impl ProjectSession {
                             continue;
                         };
                         if edge.source != target_id && target_ids.contains(&target_id) {
-                            additions.entry(target_id).or_default().push(source_rank);
+                            additions.entry(target_id).or_default().0.push(source_rank);
                         }
+                    }
+                    for occurrence in parse_standard_link_occurrences(
+                        &source.text,
+                        LinkParseOptions {
+                            internal_only: true,
+                        },
+                    ) {
+                        let Some(target_id) = reference_targets.get(&occurrence.target) else {
+                            continue;
+                        };
+                        let addition = additions.entry(target_id.clone()).or_default();
+                        if addition.2 {
+                            continue;
+                        }
+                        if addition.1.len() >= MAX_BACKLINK_REFERENCE_OCCURRENCES {
+                            addition.1.clear();
+                            addition.1.shrink_to_fit();
+                            addition.2 = true;
+                            continue;
+                        }
+                        addition.1.push(BacklinkOccurrence {
+                            source_rank,
+                            target_start: occurrence.target_range.start,
+                            target_end: occurrence.target_range.end,
+                        });
                     }
                 }
                 (
                     target_entries
                         .into_iter()
-                        .map(|(target_id, target_name)| {
+                        .map(|(target_id, target_name, _)| {
                             let additions = additions.remove(&target_id).unwrap_or_default();
                             (target_id, target_name, additions)
                         })
@@ -6078,14 +7163,37 @@ impl ProjectSession {
                     entry
                         .source_ranks
                         .retain(|source_rank| !changed_ranks.contains(source_rank));
-                    entry.source_ranks.extend(additions);
+                    entry.source_ranks.extend(additions.0);
                     entry.source_ranks.sort_unstable();
-                    entry.byte_size = entry.source_ranks.len() * std::mem::size_of::<usize>();
+                    entry
+                        .reference_occurrences
+                        .retain(|occurrence| !changed_ranks.contains(&occurrence.source_rank));
+                    if additions.2
+                        || entry.reference_occurrences.len() + additions.1.len()
+                            > MAX_BACKLINK_REFERENCE_OCCURRENCES
+                    {
+                        entry.reference_occurrences.clear();
+                        entry.reference_occurrences.shrink_to_fit();
+                        entry.reference_capacity_exceeded = true;
+                    } else {
+                        entry.reference_occurrences.extend(additions.1);
+                        entry.reference_occurrences.sort_by_key(|occurrence| {
+                            (
+                                occurrence.source_rank,
+                                occurrence.target_start,
+                                occurrence.target_end,
+                            )
+                        });
+                    }
+                    entry.byte_size = entry.source_ranks.len() * std::mem::size_of::<usize>()
+                        + entry.reference_occurrences.len()
+                            * std::mem::size_of::<BacklinkOccurrence>();
                     entry.revision = revision;
                     entry.target_name = target_name;
                 }
             }
         }
+        self.prune_backlink_cache();
     }
 
     fn replace_all_text(
@@ -7242,10 +8350,10 @@ impl ProjectSession {
                 line: 1,
                 message: format!("Search regular expression is invalid: {error}"),
                 passage_id: None,
-                quick_fixes: vec![CoreQuickFix {
-                    command: "disable-regex-search".into(),
-                    title: "Turn off regular expressions".into(),
-                }],
+                quick_fixes: vec![CoreQuickFix::manual(
+                    "disable-regex-search",
+                    "Turn off regular expressions",
+                )],
                 severity: CoreDiagnosticSeverity::Error,
                 source_id: metadata_source_id.clone(),
                 start: 0,
@@ -7365,14 +8473,10 @@ impl ProjectSession {
                         message: format!("Broken link to \"{}\"", broken_link.target_name),
                         passage_id: Some(broken_link.source.as_ref().to_owned()),
                         quick_fixes: vec![
-                            CoreQuickFix {
-                                command: format!("create-passage:{}", broken_link.target_name),
-                                title: format!("Create \"{}\"", broken_link.target_name),
-                            },
-                            CoreQuickFix {
-                                command: "rename-link-target".into(),
-                                title: "Change link target".into(),
-                            },
+                            CoreQuickFix::automatic_broken_link_create_passage(
+                                &broken_link.target_name,
+                            ),
+                            CoreQuickFix::manual("rename-link-target", "Change link target"),
                         ],
                         severity: CoreDiagnosticSeverity::Warning,
                         source_id: broken_link.source.as_ref().to_owned(),
@@ -7388,10 +8492,7 @@ impl ProjectSession {
                     line: 1,
                     message: format!("Duplicate passage name \"{}\"", duplicate.name),
                     passage_id: Some(duplicate.passage_id.clone()),
-                    quick_fixes: vec![CoreQuickFix {
-                        command: "rename-passage".into(),
-                        title: "Rename passage".into(),
-                    }],
+                    quick_fixes: vec![CoreQuickFix::manual("rename-passage", "Rename passage")],
                     severity: CoreDiagnosticSeverity::Error,
                     source_id: duplicate.passage_id,
                     start: 0,
@@ -7405,10 +8506,10 @@ impl ProjectSession {
                     line: 1,
                     message: "Story start passage is missing".into(),
                     passage_id: None,
-                    quick_fixes: vec![CoreQuickFix {
-                        command: "set-start-passage".into(),
-                        title: "Choose a start passage".into(),
-                    }],
+                    quick_fixes: vec![CoreQuickFix::manual(
+                        "set-start-passage",
+                        "Choose a start passage",
+                    )],
                     severity: CoreDiagnosticSeverity::Error,
                     source_id: metadata_source_id.clone(),
                     start: 0,
@@ -7629,14 +8730,10 @@ impl ProjectSession {
                     message: format!("Broken link to \"{}\"", broken_link.target_name),
                     passage_id: Some(broken_link.source.as_ref().to_owned()),
                     quick_fixes: vec![
-                        CoreQuickFix {
-                            command: format!("create-passage:{}", broken_link.target_name),
-                            title: format!("Create \"{}\"", broken_link.target_name),
-                        },
-                        CoreQuickFix {
-                            command: "rename-link-target".into(),
-                            title: "Change link target".into(),
-                        },
+                        CoreQuickFix::automatic_broken_link_create_passage(
+                            &broken_link.target_name,
+                        ),
+                        CoreQuickFix::manual("rename-link-target", "Change link target"),
                     ],
                     severity: CoreDiagnosticSeverity::Warning,
                     source_id: broken_link.source.as_ref().to_owned(),
@@ -7650,10 +8747,7 @@ impl ProjectSession {
                     line: 1,
                     message: format!("Duplicate passage name \"{}\"", duplicate.name),
                     passage_id: Some(duplicate.passage_id.clone()),
-                    quick_fixes: vec![CoreQuickFix {
-                        command: "rename-passage".into(),
-                        title: "Rename passage".into(),
-                    }],
+                    quick_fixes: vec![CoreQuickFix::manual("rename-passage", "Rename passage")],
                     severity: CoreDiagnosticSeverity::Error,
                     source_id: duplicate.passage_id,
                     start: 0,
@@ -7666,10 +8760,10 @@ impl ProjectSession {
                     line: 1,
                     message: "Story start passage is missing".into(),
                     passage_id: None,
-                    quick_fixes: vec![CoreQuickFix {
-                        command: "set-start-passage".into(),
-                        title: "Choose a start passage".into(),
-                    }],
+                    quick_fixes: vec![CoreQuickFix::manual(
+                        "set-start-passage",
+                        "Choose a start passage",
+                    )],
                     severity: CoreDiagnosticSeverity::Error,
                     source_id: metadata_source_id.clone(),
                     start: 0,
@@ -8108,14 +9202,8 @@ impl ProjectSession {
                     message: format!("Broken link to \"{}\"", edge.target_name),
                     passage_id: Some(passage_id.as_ref().to_owned()),
                     quick_fixes: vec![
-                        CoreQuickFix {
-                            command: format!("create-passage:{}", edge.target_name),
-                            title: format!("Create \"{}\"", edge.target_name),
-                        },
-                        CoreQuickFix {
-                            command: "rename-link-target".into(),
-                            title: "Change link target".into(),
-                        },
+                        CoreQuickFix::automatic_broken_link_create_passage(&edge.target_name),
+                        CoreQuickFix::manual("rename-link-target", "Change link target"),
                     ],
                     severity: CoreDiagnosticSeverity::Warning,
                     source_id: passage_id.as_ref().to_owned(),
@@ -8130,10 +9218,7 @@ impl ProjectSession {
                 line: 1,
                 message: format!("Duplicate passage name \"{passage_name}\""),
                 passage_id: Some(passage_id.as_ref().to_owned()),
-                quick_fixes: vec![CoreQuickFix {
-                    command: "rename-passage".into(),
-                    title: "Rename passage".into(),
-                }],
+                quick_fixes: vec![CoreQuickFix::manual("rename-passage", "Rename passage")],
                 severity: CoreDiagnosticSeverity::Error,
                 source_id: passage_id.as_ref().to_owned(),
                 start: 0,
@@ -8173,12 +9258,33 @@ impl ProjectSession {
             return Ok(());
         }
 
-        let (target_name, source_ranks, scanned_sources) = {
+        let (
+            target_name,
+            source_ranks,
+            reference_capacity_exceeded,
+            reference_coverage,
+            reference_occurrences,
+            scanned_sources,
+        ) = {
             let story = self.story(story_id.as_ref())?;
             let target = story
                 .passage_by_id(passage_id)
                 .ok_or_else(|| CoreError::PassageNotFound(passage_id.as_ref().to_owned()))?;
+            let reference_coverage = if story
+                .passages
+                .iter()
+                .filter(|passage| passage.name == target.name)
+                .take(2)
+                .count()
+                == 1
+            {
+                CorePassageReferenceCoverage::StandardLinksOnly
+            } else {
+                CorePassageReferenceCoverage::AmbiguousPassageName
+            };
             let mut source_ranks = Vec::new();
+            let mut reference_occurrences = Vec::new();
+            let mut reference_capacity_exceeded = false;
 
             for (rank, source) in story.passages.iter().enumerate() {
                 source_ranks.extend(
@@ -8189,10 +9295,43 @@ impl ProjectSession {
                         })
                         .map(|_| rank),
                 );
+                if reference_coverage == CorePassageReferenceCoverage::StandardLinksOnly
+                    && !reference_capacity_exceeded
+                {
+                    for occurrence in parse_standard_link_occurrences(
+                        &source.text,
+                        LinkParseOptions {
+                            internal_only: true,
+                        },
+                    )
+                    .into_iter()
+                    .filter(|occurrence| occurrence.target == target.name)
+                    {
+                        if reference_occurrences.len() >= MAX_BACKLINK_REFERENCE_OCCURRENCES {
+                            reference_occurrences.clear();
+                            reference_occurrences.shrink_to_fit();
+                            reference_capacity_exceeded = true;
+                            break;
+                        }
+                        reference_occurrences.push(BacklinkOccurrence {
+                            source_rank: rank,
+                            target_start: occurrence.target_range.start,
+                            target_end: occurrence.target_range.end,
+                        });
+                    }
+                }
             }
-            (target.name.clone(), source_ranks, story.passage_count())
+            (
+                target.name.clone(),
+                source_ranks,
+                reference_capacity_exceeded,
+                reference_coverage,
+                reference_occurrences,
+                story.passage_count(),
+            )
         };
-        let byte_size = source_ranks.len() * std::mem::size_of::<usize>();
+        let byte_size = source_ranks.len() * std::mem::size_of::<usize>()
+            + reference_occurrences.len() * std::mem::size_of::<BacklinkOccurrence>();
 
         self.backlink_scan_count += 1;
         self.backlink_scanned_source_count += scanned_sources;
@@ -8203,6 +9342,9 @@ impl ProjectSession {
                 passage_id.clone(),
                 BacklinkCacheEntry {
                     byte_size,
+                    reference_capacity_exceeded,
+                    reference_coverage,
+                    reference_occurrences,
                     revision,
                     source_ranks,
                     target_name,
@@ -8266,7 +9408,7 @@ impl ProjectSession {
             .backlink_cache
             .get(&story_id)
             .and_then(|entries| entries.get(&passage_id))
-            .expect("backlink cache was initialized");
+            .ok_or_else(|| CoreError::PassageNotFound(passage_id.as_ref().to_owned()))?;
         let total_count = entry.source_ranks.len();
         let target_name = entry.target_name.clone();
         let (source_ranks, next_cursor) = read_model_page_refs(
@@ -8295,6 +9437,138 @@ impl ProjectSession {
             revision,
             story_id: story_id.as_ref().to_owned(),
             total_count,
+        })
+    }
+
+    pub fn passage_references_page(
+        &mut self,
+        story_id: &str,
+        target_passage_id: &str,
+        query: CorePassageReferencesQuery,
+    ) -> Result<CorePassageReferencesPage, CoreError> {
+        let story_id = StoryId::new(story_id);
+        let passage_id = PassageId::new(target_passage_id);
+        let revision = self.revision().min(u32::MAX as u64) as u32;
+        let cursor_fingerprint = read_model_query_fingerprint(&query, |query| query.cursor = None)
+            ^ fingerprint(&(story_id.as_ref(), passage_id.as_ref()));
+        let offset = read_model_page_offset(query.cursor.as_deref(), revision, cursor_fingerprint)?;
+        self.ensure_backlink_cache(&story_id, &passage_id)?;
+        let entry = self
+            .backlink_cache
+            .get(&story_id)
+            .and_then(|entries| entries.get(&passage_id))
+            .ok_or_else(|| CoreError::PassageNotFound(passage_id.as_ref().to_owned()))?;
+        if entry.reference_capacity_exceeded {
+            return Err(CoreError::PassageReferencesTooLarge(
+                passage_id.as_ref().to_owned(),
+            ));
+        }
+        let story = self.story(story_id.as_ref())?;
+        let total_count = entry.reference_occurrences.len();
+        let limit = query.limit.clamp(1, MAX_READ_MODEL_PAGE_LIMIT);
+        let offset = offset.min(total_count);
+        let end = (offset + limit).min(total_count);
+        let next_cursor =
+            (end < total_count).then(|| format!("{revision}:{cursor_fingerprint}:{end}"));
+        let page_occurrences = entry.reference_occurrences[offset..end].to_vec();
+        let references = page_occurrences
+            .iter()
+            .filter_map(|occurrence| {
+                let source = story.passages.get_at(occurrence.source_rank)?;
+                let start = utf16_len(&source.text[..occurrence.target_start]);
+                let end = utf16_len(&source.text[..occurrence.target_end]);
+                Some(CorePassageReference {
+                    location: CorePassageLocation {
+                        passage_id: source.id.as_ref().to_owned(),
+                        passage_name: source.name.clone(),
+                        provenance: standard_links_provenance(),
+                        result_key: format!(
+                            "twine-core.standard-links:{}:{}:{}:{}:{}",
+                            story_id.as_ref(),
+                            passage_id.as_ref(),
+                            source.id.as_ref(),
+                            occurrence.target_start,
+                            occurrence.target_end
+                        ),
+                        revision,
+                        span: CoreSourceSpan {
+                            encoding: CoreSourceRangeEncoding::Utf16CodeUnits,
+                            start,
+                            end,
+                        },
+                        story_id: story_id.as_ref().to_owned(),
+                    },
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(CorePassageReferencesPage {
+            coverage: entry.reference_coverage,
+            next_cursor,
+            passage_id: passage_id.as_ref().to_owned(),
+            references,
+            revision,
+            story_id: story_id.as_ref().to_owned(),
+            total_count,
+        })
+    }
+
+    pub fn definition(
+        &self,
+        query: CoreDefinitionQuery,
+    ) -> Result<CoreDefinitionResult, CoreError> {
+        let revision = self.revision().min(u32::MAX as u64) as u32;
+        if query.expected_revision != revision {
+            return Ok(CoreDefinitionResult::Stale);
+        }
+        if query.symbol_kind != CoreDefinitionSymbolKind::Passage {
+            return Ok(CoreDefinitionResult::Unsupported {
+                symbol_kind: query.symbol_kind,
+            });
+        }
+        let story = self.story(&query.story_id)?;
+        let mut total_count = 0;
+        let mut locations = Vec::new();
+        for passage in story
+            .passages
+            .iter()
+            .filter(|passage| passage.name == query.name)
+        {
+            total_count += 1;
+            if locations.len() >= MAX_DEFINITION_AMBIGUOUS_LOCATIONS {
+                continue;
+            }
+            locations.push(CorePassageLocation {
+                passage_id: passage.id.as_ref().to_owned(),
+                passage_name: passage.name.clone(),
+                provenance: CoreSemanticProvenance {
+                    capability_revision: 1,
+                    format_name: None,
+                    format_version: None,
+                    provider_identifier: "twine-core.passage-index".into(),
+                },
+                result_key: format!(
+                    "twine-core.passage-index:{}:{}",
+                    story.id.as_ref(),
+                    passage.id.as_ref()
+                ),
+                revision,
+                span: CoreSourceSpan {
+                    encoding: CoreSourceRangeEncoding::Utf16CodeUnits,
+                    start: 0,
+                    end: 0,
+                },
+                story_id: story.id.as_ref().to_owned(),
+            });
+        }
+        Ok(match total_count {
+            0 => CoreDefinitionResult::NotFound,
+            1 => CoreDefinitionResult::Unique {
+                location: locations.into_iter().next().expect("one location"),
+            },
+            _ => CoreDefinitionResult::Ambiguous {
+                locations,
+                total_count,
+            },
         })
     }
 
@@ -9423,6 +10697,15 @@ fn core_passage_link_fact(edge: &LinkEdge) -> CorePassageLinkFact {
     }
 }
 
+fn standard_links_provenance() -> CoreSemanticProvenance {
+    CoreSemanticProvenance {
+        capability_revision: 1,
+        format_name: None,
+        format_version: None,
+        provider_identifier: "twine-core.standard-links".into(),
+    }
+}
+
 fn default_zoom() -> f64 {
     1.0
 }
@@ -9442,6 +10725,41 @@ fn next_passage_id(story: &Story) -> String {
         }
 
         suffix += 1;
+    }
+}
+
+fn automatic_broken_link_target(quick_fix: &CoreQuickFix) -> Option<&str> {
+    (quick_fix.applicability == CoreQuickFixApplicability::Automatic)
+        .then(|| quick_fix.command.strip_prefix("create-passage:"))
+        .flatten()
+        .filter(|target| !target.is_empty())
+}
+
+fn next_diagnostic_fix_passage_id(story: &Story, changes: &[CanonicalPlanDraftChange]) -> String {
+    let mut suffix = story.passage_count() + changes.len() + 1;
+    loop {
+        let candidate = format!("passage-{suffix}");
+        let exists_in_story = story
+            .passages
+            .iter()
+            .any(|passage| passage.id.as_ref() == candidate);
+        let exists_in_changes = changes.iter().any(|change| {
+            matches!(
+                &change.change,
+                CanonicalPlanChange::AddPassage { passage, .. } if passage.id.as_ref() == candidate
+            )
+        });
+        if !exists_in_story && !exists_in_changes {
+            return candidate;
+        }
+        suffix += 1;
+    }
+}
+
+fn diagnostic_fix_invalid_plan(message: &str) -> RefactorPlanFailure {
+    RefactorPlanFailure {
+        code: RefactorPlanFailureCode::InvalidPlan,
+        message: message.into(),
     }
 }
 
@@ -12984,10 +14302,10 @@ fn asset_diagnostics(
                 line: location.map_or(1, |reference| reference.line),
                 message: format!("Referenced asset \"{}\" is missing", asset.path),
                 passage_id: location.and_then(|reference| reference.passage_id.clone()),
-                quick_fixes: vec![CoreQuickFix {
-                    command: format!("import-asset:{}", asset.path),
-                    title: "Import or relink asset".into(),
-                }],
+                quick_fixes: vec![CoreQuickFix::manual(
+                    format!("import-asset:{}", asset.path),
+                    "Import or relink asset",
+                )],
                 severity: CoreDiagnosticSeverity::Error,
                 source_id: location
                     .map(|reference| reference.source_id.clone())
@@ -13003,10 +14321,10 @@ fn asset_diagnostics(
                 line: 1,
                 message: format!("Asset \"{}\" is not referenced", asset.path),
                 passage_id: None,
-                quick_fixes: vec![CoreQuickFix {
-                    command: format!("delete-asset:{}", asset.path),
-                    title: "Delete unused asset".into(),
-                }],
+                quick_fixes: vec![CoreQuickFix::manual(
+                    format!("delete-asset:{}", asset.path),
+                    "Delete unused asset",
+                )],
                 severity: CoreDiagnosticSeverity::Info,
                 source_id: format!("{}:assets", story.id.as_ref()),
                 start: 0,
@@ -13423,10 +14741,10 @@ fn refresh_read_model_aggregates(
             line: 1,
             message: "Story start passage is missing".into(),
             passage_id: None,
-            quick_fixes: vec![CoreQuickFix {
-                command: "set-start-passage".into(),
-                title: "Choose a start passage".into(),
-            }],
+            quick_fixes: vec![CoreQuickFix::manual(
+                "set-start-passage",
+                "Choose a start passage",
+            )],
             severity: CoreDiagnosticSeverity::Error,
             source_id: metadata_source_id.clone(),
             start: 0,
@@ -13461,14 +14779,8 @@ fn refresh_read_model_aggregates(
                 message: format!("Broken link to \"{}\"", broken_link.target_name),
                 passage_id: Some(broken_link.source.as_ref().to_owned()),
                 quick_fixes: vec![
-                    CoreQuickFix {
-                        command: format!("create-passage:{}", broken_link.target_name),
-                        title: format!("Create \"{}\"", broken_link.target_name),
-                    },
-                    CoreQuickFix {
-                        command: "rename-link-target".into(),
-                        title: "Change link target".into(),
-                    },
+                    CoreQuickFix::automatic_broken_link_create_passage(&broken_link.target_name),
+                    CoreQuickFix::manual("rename-link-target", "Change link target"),
                 ],
                 severity: CoreDiagnosticSeverity::Warning,
                 source_id: broken_link.source.as_ref().to_owned(),
@@ -13846,6 +15158,1979 @@ mod tests {
             stories: vec![story],
             ..Project::default()
         })
+    }
+
+    fn refactor_runtime(session: &ProjectSession) -> RefactorRuntimeState {
+        RefactorRuntimeState {
+            project_revision: u32::try_from(session.revision()).expect("test revision fits u32"),
+            buffers: vec![RefactorBufferPrecondition {
+                buffer_id: "passage:a".into(),
+                registration_id: "editor-a".into(),
+                generation: 7,
+            }],
+            external: Some(RefactorExternalPrecondition {
+                session_instance_id: "native-session".into(),
+                generation: 3,
+            }),
+            provider: Some(RefactorProviderPrecondition {
+                identifier: "harlowe".into(),
+                format_version: "3.3.9".into(),
+                capability_revision: 2,
+            }),
+        }
+    }
+
+    fn complete_project_replace_plan(
+        session: &mut ProjectSession,
+        request: PlanProjectReplaceRequest,
+        runtime: &RefactorRuntimeState,
+    ) -> RefactorPlanSummary {
+        let task = session
+            .begin_project_replace_plan(request, runtime.clone())
+            .expect("begin project replace plan");
+        loop {
+            match session.continue_project_replace_plan(&task) {
+                PlanProjectReplaceResult::Pending { .. } => {}
+                PlanProjectReplaceResult::Complete { summary } => return summary,
+                result => panic!("expected completed project replace plan, got {result:?}"),
+            }
+        }
+    }
+
+    fn canonical_refactor_changes(session: &ProjectSession) -> Vec<CanonicalPlanChange> {
+        let story = &session.project.stories[0];
+        let removed = story
+            .passage_by_id(&PassageId::new("c"))
+            .expect("removed passage")
+            .clone();
+        let removed_layout = session
+            .project
+            .layout
+            .passages
+            .get(&story.id, &removed.id)
+            .cloned();
+        let added = Passage {
+            custom_attributes: BTreeMap::new(),
+            id: PassageId::new("d"),
+            layout: None,
+            metadata: BTreeMap::new(),
+            name: "Destination".into(),
+            source_pid: None,
+            story: story.id.clone(),
+            tags: Vec::new(),
+            text: "Arrived".into(),
+        };
+
+        vec![
+            CanonicalPlanChange::TextEdit {
+                source: CanonicalSourceIdentity::Passage {
+                    story_id: story.id.as_ref().to_owned(),
+                    passage_id: "a".into(),
+                },
+                range: RefactorTextRange {
+                    start_utf8_byte: 2,
+                    end_utf8_byte: 6,
+                },
+                expected_text: "Next".into(),
+                replacement_text: "Continue".into(),
+            },
+            CanonicalPlanChange::RenamePassage {
+                story_id: story.id.as_ref().to_owned(),
+                passage_id: "b".into(),
+                before_name: "Next".into(),
+                after_name: "Continue".into(),
+            },
+            CanonicalPlanChange::AddPassage {
+                story_id: story.id.as_ref().to_owned(),
+                passage: added,
+                layout: None,
+            },
+            CanonicalPlanChange::SetStartPassage {
+                story_id: story.id.as_ref().to_owned(),
+                before_passage_id: "a".into(),
+                after_passage_id: "d".into(),
+            },
+            CanonicalPlanChange::RemovePassage {
+                story_id: story.id.as_ref().to_owned(),
+                passage: removed,
+                layout: removed_layout,
+            },
+            CanonicalPlanChange::UpdateStoryMetadata {
+                story_id: story.id.as_ref().to_owned(),
+                before: StoryMetadataPatch {
+                    name: Some("Example".into()),
+                    ..StoryMetadataPatch::default()
+                },
+                after: StoryMetadataPatch {
+                    name: Some("Revised".into()),
+                    ..StoryMetadataPatch::default()
+                },
+            },
+            CanonicalPlanChange::UpdateProjectMetadata {
+                story_id: story.id.as_ref().to_owned(),
+                field: CanonicalProjectMetadataField::Name,
+                before: "Example".into(),
+                after: "Revised Project".into(),
+            },
+        ]
+    }
+
+    fn refactor_draft(
+        session: &ProjectSession,
+        changes: Vec<CanonicalPlanChange>,
+    ) -> CanonicalPlanDraft {
+        CanonicalPlanDraft {
+            operation_kind: "test-project-operation".into(),
+            coverage: "exact-test-coverage".into(),
+            preconditions: refactor_runtime(session),
+            changes: changes
+                .into_iter()
+                .enumerate()
+                .map(|(index, change)| CanonicalPlanDraftChange {
+                    key: format!("change-{index}"),
+                    group_key: None,
+                    dependencies: (index == 3)
+                        .then(|| "change-2".into())
+                        .into_iter()
+                        .collect(),
+                    change,
+                })
+                .collect(),
+        }
+    }
+
+    fn session_with_warm_refactor_caches() -> ProjectSession {
+        let mut project = session().project;
+        let mut untouched_story = story();
+        untouched_story.id = StoryId::new("story-2");
+        untouched_story.name = "Untouched".into();
+        for passage in untouched_story.passages.iter_mut() {
+            passage.story = untouched_story.id.clone();
+        }
+        project.stories.push(untouched_story);
+        let mut session = ProjectSession::new(project);
+
+        for story_id in ["story-1", "story-2"] {
+            session
+                .contents_page(
+                    story_id,
+                    CoreContentsQuery {
+                        filter: CoreContentsFilter::Diagnostics,
+                        ..CoreContentsQuery::default()
+                    },
+                )
+                .expect("warm graph, contents, analysis, and read-model caches");
+            session
+                .backlinks_page(story_id, "b", CoreBacklinksQuery::default())
+                .expect("warm backlink cache");
+            session
+                .backlinks_page(story_id, "b", CoreBacklinksQuery::default())
+                .expect("record backlink cache hit");
+        }
+
+        session
+    }
+
+    fn sparse_refactor_draft(session: &ProjectSession) -> CanonicalPlanDraft {
+        let mut draft = refactor_draft(
+            session,
+            vec![CanonicalPlanChange::RenamePassage {
+                story_id: "story-1".into(),
+                passage_id: "b".into(),
+                before_name: "Next".into(),
+                after_name: "Continue".into(),
+            }],
+        );
+        draft.operation_kind = "passage-rename".into();
+        draft
+    }
+
+    #[test]
+    fn canonical_refactor_apply_is_one_atomic_undoable_session_transaction() {
+        let mut session = session();
+        let before = session.project.clone();
+        let runtime = refactor_runtime(&session);
+        let summary = session
+            .plan_refactor(refactor_draft(
+                &session,
+                canonical_refactor_changes(&session),
+            ))
+            .expect("plan");
+        assert_eq!(
+            session
+                .performance_diagnostics()
+                .refactor_plan_store_entry_count,
+            1
+        );
+        let mut request = RefactorPlanApplyRequest {
+            plan_id: summary.plan_id,
+            expected_project_revision: runtime.project_revision,
+            selection: RefactorPlanSelection::All,
+        };
+        let batch = session
+            .apply_refactor_plan(&request, &runtime)
+            .expect("atomic apply");
+
+        assert_eq!(session.revision(), 2);
+        assert_eq!(session.undo_stack.len(), 1);
+        assert_eq!(session.undo_stack[0].kind, CoreHistoryKind::Refactor);
+        assert_eq!(session.project.manifest.name, "Revised Project");
+        let story = &session.project.stories[0];
+        assert_eq!(story.name, "Revised");
+        assert_eq!(story.start_passage.as_ref(), "d");
+        assert_eq!(
+            story.passage_by_id(&PassageId::new("b")).unwrap().name,
+            "Continue"
+        );
+        assert_eq!(
+            story.passage_by_id(&PassageId::new("a")).unwrap().text,
+            "[[Continue]] [[Label->Next]] [[Next<-Back]]"
+        );
+        assert!(story.passage_by_id(&PassageId::new("c")).is_none());
+        assert!(story.passage_by_id(&PassageId::new("d")).is_some());
+        assert!(
+            batch
+                .patches
+                .iter()
+                .any(|patch| matches!(patch, Patch::ProjectMetadataUpdated { .. }))
+        );
+        assert_eq!(
+            session
+                .performance_diagnostics()
+                .refactor_plan_store_entry_count,
+            0
+        );
+        request.expected_project_revision = 2;
+        let mut current_runtime = runtime;
+        current_runtime.project_revision = 2;
+        assert_eq!(
+            session
+                .apply_refactor_plan(&request, &current_runtime)
+                .unwrap_err()
+                .code,
+            RefactorPlanFailureCode::PlanEvicted
+        );
+
+        let applied = session.project.clone();
+        session.undo().expect("undo refactor");
+        assert_eq!(session.project, before);
+        assert_eq!(session.revision(), 3);
+        session.redo().expect("redo refactor");
+        assert_eq!(session.project, applied);
+        assert_eq!(session.revision(), 4);
+    }
+
+    #[test]
+    fn passage_rename_planning_is_chunked_atomic_and_undoable() {
+        let mut story = story();
+        story.passages = (0..514)
+            .map(|index| {
+                passage(
+                    &format!("extra-{index}"),
+                    &format!("Extra {index}"),
+                    "",
+                    600.0 + index as f64,
+                )
+            })
+            .chain(story.passages.iter().cloned())
+            .collect::<Vec<_>>()
+            .into();
+        story.passage_by_id_mut(&PassageId::new("a")).unwrap().text =
+            "Before\r\n[[ Показать -> Next ][set: $x to \"😀\"]] [[Next<-Назад]] [[Label|Next]]"
+                .into();
+        let project = Project {
+            manifest: ProjectManifest {
+                name: "Example".into(),
+                storage: StoragePolicy::default(),
+                ..ProjectManifest::default()
+            },
+            layout: GraphLayout::from_story_layout(&story),
+            stories: vec![story],
+            ..Project::default()
+        };
+        let mut session = ProjectSession::new(project);
+        let runtime = refactor_runtime(&session);
+        let task = session
+            .begin_passage_rename_plan(
+                PlanPassageRenameRequest {
+                    story_id: "story-1".into(),
+                    passage_id: "b".into(),
+                    after_name: "Néxt🚀".into(),
+                },
+                runtime.clone(),
+            )
+            .expect("begin rename planning");
+        assert!(matches!(
+            session.continue_passage_rename_plan(&task),
+            PlanPassageRenameResult::Pending { progress, .. }
+                if progress.scanned_passage_count == 512 && progress.total_passage_count == 517
+        ));
+        let summary = match session.continue_passage_rename_plan(&task) {
+            PlanPassageRenameResult::Complete { summary } => summary,
+            result => panic!("expected completed rename plan, got {result:?}"),
+        };
+        assert_eq!(summary.operation_kind, "passage-rename");
+        assert_eq!(summary.coverage, "standard-links-only");
+        assert_eq!(summary.change_count, 4);
+        let details = session
+            .refactor_plan_detail_page(&summary.first_detail_cursor)
+            .expect("details");
+        assert!(
+            details
+                .changes
+                .iter()
+                .all(|detail| detail.group_id.is_some())
+        );
+        let rename = details
+            .changes
+            .iter()
+            .find(|detail| detail.kind == RefactorPlanChangeKind::RenamePassage)
+            .expect("rename detail");
+        assert!(
+            session
+                .apply_refactor_plan(
+                    &RefactorPlanApplyRequest {
+                        plan_id: summary.plan_id.clone(),
+                        expected_project_revision: runtime.project_revision,
+                        selection: RefactorPlanSelection::Only {
+                            change_ids: vec![rename.change_id.clone()],
+                        },
+                    },
+                    &runtime,
+                )
+                .is_err()
+        );
+        let before = session.project.clone();
+        session
+            .apply_refactor_plan(
+                &RefactorPlanApplyRequest {
+                    plan_id: summary.plan_id,
+                    expected_project_revision: runtime.project_revision,
+                    selection: RefactorPlanSelection::All,
+                },
+                &runtime,
+            )
+            .expect("apply atomic rename");
+        assert_eq!(
+            session.project.stories[0]
+                .passage_by_id(&PassageId::new("a"))
+                .unwrap()
+                .text,
+            "Before\r\n[[ Показать -> Néxt🚀 ][set: $x to \"😀\"]] [[Néxt🚀<-Назад]] [[Label|Néxt🚀]]"
+        );
+        assert_eq!(
+            session.project.stories[0]
+                .passage_by_id(&PassageId::new("b"))
+                .unwrap()
+                .name,
+            "Néxt🚀"
+        );
+        let applied = session.project.clone();
+        session.undo().expect("single undo");
+        assert_eq!(session.project, before);
+        session.redo().expect("single redo");
+        assert_eq!(session.project, applied);
+    }
+
+    #[test]
+    fn diagnostic_quick_fixes_expose_rust_owned_automatic_applicability() {
+        let mut session = session();
+        let diagnostics = session
+            .diagnostics_page("story-1", CoreDiagnosticsQuery::default())
+            .expect("diagnostics")
+            .diagnostics;
+        let broken_link = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "broken-link")
+            .expect("broken link diagnostic");
+
+        assert_eq!(
+            broken_link.quick_fixes[0].applicability,
+            CoreQuickFixApplicability::Automatic
+        );
+        assert_eq!(
+            broken_link.quick_fixes[1].applicability,
+            CoreQuickFixApplicability::Manual
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .flat_map(|diagnostic| &diagnostic.quick_fixes)
+                .all(|quick_fix| quick_fix.command.starts_with("create-passage:")
+                    || quick_fix.applicability == CoreQuickFixApplicability::Manual)
+        );
+        assert_eq!(
+            serde_json::to_value(PlanDiagnosticFixesSelection::AllSafe {
+                excluded_diagnostic_ids: vec!["diagnostic".into()],
+            })
+            .expect("serialize diagnostic selection"),
+            serde_json::json!({
+                "type": "allSafe",
+                "excludedDiagnosticIds": ["diagnostic"]
+            })
+        );
+    }
+
+    #[test]
+    fn diagnostic_fix_planning_resolves_only_current_automatic_descriptors() {
+        let mut session = session();
+        let runtime = refactor_runtime(&session);
+        let diagnostics = session
+            .diagnostics_page("story-1", CoreDiagnosticsQuery::default())
+            .expect("diagnostics")
+            .diagnostics;
+        let broken_link = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "broken-link")
+            .expect("broken link diagnostic");
+        let automatic = broken_link.quick_fixes[0].clone();
+        let manual = broken_link.quick_fixes[1].clone();
+        let selection = DiagnosticFixSelection {
+            diagnostic_id: diagnostic_identity(broken_link),
+            quick_fix_command: automatic.command,
+        };
+        let before = session.project.clone();
+
+        let summary = match session.plan_diagnostic_fixes(
+            PlanDiagnosticFixesRequest {
+                story_id: "story-1".into(),
+                selection: PlanDiagnosticFixesSelection::Only {
+                    fixes: vec![selection.clone()],
+                },
+            },
+            runtime.clone(),
+        ) {
+            PlanDiagnosticFixesResult::Complete { summary } => summary,
+            result => panic!("expected complete plan, got {result:?}"),
+        };
+        assert_eq!(
+            session.project, before,
+            "planning must not mutate the project"
+        );
+        assert_eq!(session.revision(), runtime.project_revision as u64);
+        assert_eq!(summary.operation_kind, "diagnostic-fixes");
+        assert_eq!(summary.coverage, "deterministic-safe-fixes");
+        assert_eq!(summary.change_count, 1);
+        let detail = session
+            .refactor_plan_detail_page(&summary.first_detail_cursor)
+            .expect("plan detail");
+        assert!(matches!(
+            detail.changes[0].after,
+            Some(RefactorPlanValue::Passage { ref passage }) if passage.name == "Missing"
+        ));
+
+        for fixes in [
+            vec![DiagnosticFixSelection {
+                diagnostic_id: selection.diagnostic_id.clone(),
+                quick_fix_command: manual.command,
+            }],
+            vec![DiagnosticFixSelection {
+                diagnostic_id: "[\"broken-link\",\"forged\",null,0,0,\"forged\"]".into(),
+                quick_fix_command: "create-passage:Injected".into(),
+            }],
+            vec![selection.clone(), selection.clone()],
+        ] {
+            assert!(matches!(
+                session.plan_diagnostic_fixes(
+                    PlanDiagnosticFixesRequest {
+                        story_id: "story-1".into(),
+                        selection: PlanDiagnosticFixesSelection::Only { fixes },
+                    },
+                    runtime.clone(),
+                ),
+                PlanDiagnosticFixesResult::Failure {
+                    failure: RefactorPlanFailure {
+                        code: RefactorPlanFailureCode::InvalidPlan,
+                        ..
+                    }
+                }
+            ));
+        }
+        assert!(matches!(
+            session.plan_diagnostic_fixes(
+                PlanDiagnosticFixesRequest {
+                    story_id: "story-1".into(),
+                    selection: PlanDiagnosticFixesSelection::Only { fixes: Vec::new() },
+                },
+                runtime,
+            ),
+            PlanDiagnosticFixesResult::Failure {
+                failure: RefactorPlanFailure {
+                    code: RefactorPlanFailureCode::InvalidPlan,
+                    ..
+                }
+            }
+        ));
+        assert_eq!(
+            session.project, before,
+            "invalid requests cannot inject changes"
+        );
+    }
+
+    #[test]
+    fn diagnostic_fix_only_rejects_ambiguous_current_diagnostic_identities() {
+        let mut session = session();
+        let runtime = refactor_runtime(&session);
+        let diagnostic = session
+            .read_model("story-1")
+            .expect("read model")
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "broken-link")
+            .expect("broken link")
+            .clone();
+        let selection = DiagnosticFixSelection {
+            diagnostic_id: diagnostic_identity(&diagnostic),
+            quick_fix_command: diagnostic.quick_fixes[0].command.clone(),
+        };
+        session
+            .read_model_cache
+            .get_mut(&StoryId::new("story-1"))
+            .expect("cached read model")
+            .diagnostics
+            .push(diagnostic);
+
+        assert!(matches!(
+            session.plan_diagnostic_fixes(
+                PlanDiagnosticFixesRequest {
+                    story_id: "story-1".into(),
+                    selection: PlanDiagnosticFixesSelection::Only {
+                        fixes: vec![selection],
+                    },
+                },
+                runtime,
+            ),
+            PlanDiagnosticFixesResult::Failure {
+                failure: RefactorPlanFailure {
+                    code: RefactorPlanFailureCode::InvalidPlan,
+                    ..
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn diagnostic_fix_all_safe_deduplicates_exclusions_and_applies_atomically() {
+        let mut session = session();
+        session.project.stories[0]
+            .passage_by_id_mut(&PassageId::new("b"))
+            .expect("fixture passage")
+            .text = "[[Missing]] [[Other]] [[Missing]]".into();
+        let runtime = refactor_runtime(&session);
+        let diagnostics = session
+            .diagnostics_page("story-1", CoreDiagnosticsQuery::default())
+            .expect("diagnostics")
+            .diagnostics;
+        let missing_id = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.message.contains("Missing"))
+            .map(diagnostic_identity)
+            .expect("missing diagnostic");
+        let before = session.project.clone();
+        let all_safe = match session.plan_diagnostic_fixes(
+            PlanDiagnosticFixesRequest {
+                story_id: "story-1".into(),
+                selection: PlanDiagnosticFixesSelection::AllSafe {
+                    excluded_diagnostic_ids: Vec::new(),
+                },
+            },
+            runtime.clone(),
+        ) {
+            PlanDiagnosticFixesResult::Complete { summary } => summary,
+            result => panic!("expected complete all-safe plan, got {result:?}"),
+        };
+        assert_eq!(
+            all_safe.change_count, 2,
+            "two Missing diagnostics must produce one creation plus Other"
+        );
+        let summary = match session.plan_diagnostic_fixes(
+            PlanDiagnosticFixesRequest {
+                story_id: "story-1".into(),
+                selection: PlanDiagnosticFixesSelection::AllSafe {
+                    excluded_diagnostic_ids: vec![missing_id],
+                },
+            },
+            runtime.clone(),
+        ) {
+            PlanDiagnosticFixesResult::Complete { summary } => summary,
+            result => panic!("expected complete plan, got {result:?}"),
+        };
+        assert_eq!(
+            summary.change_count, 1,
+            "only Other remains after exclusion"
+        );
+        assert_eq!(
+            session.project, before,
+            "planning must not mutate the project"
+        );
+
+        let batch = session
+            .apply_refactor_plan(
+                &RefactorPlanApplyRequest {
+                    plan_id: summary.plan_id,
+                    expected_project_revision: runtime.project_revision,
+                    selection: RefactorPlanSelection::All,
+                },
+                &runtime,
+            )
+            .expect("atomic apply");
+        assert_eq!(session.undo_stack.len(), 1);
+        assert_eq!(session.undo_stack[0].kind, CoreHistoryKind::Refactor);
+        assert_eq!(
+            batch
+                .patches
+                .iter()
+                .filter(|patch| matches!(patch, Patch::PassageCreated { .. }))
+                .count(),
+            1
+        );
+        assert!(
+            session.project.stories[0]
+                .passage_by_name("Other")
+                .is_some()
+        );
+        assert!(
+            session.project.stories[0]
+                .passage_by_name("Missing")
+                .is_none()
+        );
+        let applied = session.project.clone();
+        session.undo().expect("undo diagnostic fixes");
+        assert_eq!(session.project, before);
+        session.redo().expect("redo diagnostic fixes");
+        assert_eq!(session.project, applied);
+    }
+
+    #[test]
+    fn diagnostic_fix_planning_enforces_request_limits_before_materialization() {
+        let mut session = session();
+        let runtime = refactor_runtime(&session);
+        for selection in [
+            PlanDiagnosticFixesSelection::AllSafe {
+                excluded_diagnostic_ids: vec![String::new(); MAX_REFACTOR_SELECTION_IDS + 1],
+            },
+            PlanDiagnosticFixesSelection::AllSafe {
+                excluded_diagnostic_ids: vec!["x".repeat(MAX_REFACTOR_SELECTION_BYTES)],
+            },
+        ] {
+            assert!(matches!(
+                session.plan_diagnostic_fixes(
+                    PlanDiagnosticFixesRequest {
+                        story_id: "story-1".into(),
+                        selection,
+                    },
+                    runtime.clone(),
+                ),
+                PlanDiagnosticFixesResult::Failure {
+                    failure: RefactorPlanFailure {
+                        code: RefactorPlanFailureCode::SelectionTooLarge,
+                        ..
+                    }
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn project_replace_plan_is_complete_beyond_search_caps_and_compactly_selectable() {
+        let mut session = session();
+        let original = "needle ".repeat(650);
+        session.project.stories[0]
+            .passage_by_id_mut(&PassageId::new("a"))
+            .unwrap()
+            .text = original.clone();
+        let runtime = refactor_runtime(&session);
+        let summary = complete_project_replace_plan(
+            &mut session,
+            PlanProjectReplaceRequest {
+                story_id: "story-1".into(),
+                query: "needle".into(),
+                replacement: "result".into(),
+                include_passage_names: false,
+                include_passage_text: true,
+                include_script: false,
+                include_stylesheet: false,
+                match_case: true,
+                use_regexes: false,
+            },
+            &runtime,
+        );
+
+        assert_eq!(summary.operation_kind, "project-replace");
+        assert_eq!(summary.change_count, 650);
+        let first_page = session
+            .refactor_plan_detail_page(&summary.first_detail_cursor)
+            .expect("first bounded detail page");
+        assert_eq!(first_page.changes.len(), 200);
+        assert!(first_page.next_cursor.is_some());
+        let excluded = first_page.changes[0].change_id.clone();
+        let before = session.project.clone();
+
+        session
+            .apply_refactor_plan(
+                &RefactorPlanApplyRequest {
+                    plan_id: summary.plan_id,
+                    expected_project_revision: runtime.project_revision,
+                    selection: RefactorPlanSelection::AllExcept {
+                        change_ids: vec![excluded],
+                    },
+                },
+                &runtime,
+            )
+            .expect("apply every planned match except one opaque identity");
+        let applied_text = &session.project.stories[0]
+            .passage_by_id(&PassageId::new("a"))
+            .unwrap()
+            .text;
+        assert_eq!(applied_text.matches("needle").count(), 1);
+        assert_eq!(applied_text.matches("result").count(), 649);
+        assert_eq!(session.undo_stack.len(), 1);
+        assert_eq!(session.undo_stack[0].kind, CoreHistoryKind::Refactor);
+        let applied = session.project.clone();
+        session.undo().expect("single replace undo");
+        assert_eq!(session.project, before);
+        session.redo().expect("single replace redo");
+        assert_eq!(session.project, applied);
+    }
+
+    #[test]
+    fn project_replace_preserves_literal_dollars_and_expands_regex_captures_only_in_regex_mode() {
+        let mut literal = session();
+        literal.project.stories[0]
+            .passage_by_id_mut(&PassageId::new("a"))
+            .unwrap()
+            .text = "price price".into();
+        literal.project.stories[0].script = "price".into();
+        literal.project.stories[0].stylesheet = "price".into();
+        let runtime = refactor_runtime(&literal);
+        let summary = complete_project_replace_plan(
+            &mut literal,
+            PlanProjectReplaceRequest {
+                story_id: "story-1".into(),
+                query: "price".into(),
+                replacement: "$1 $$".into(),
+                include_passage_names: false,
+                include_passage_text: true,
+                include_script: true,
+                include_stylesheet: false,
+                match_case: true,
+                use_regexes: false,
+            },
+            &runtime,
+        );
+        assert_eq!(summary.change_count, 3);
+        literal
+            .apply_refactor_plan(
+                &RefactorPlanApplyRequest {
+                    plan_id: summary.plan_id,
+                    expected_project_revision: runtime.project_revision,
+                    selection: RefactorPlanSelection::All,
+                },
+                &runtime,
+            )
+            .expect("apply literal replacement");
+        assert_eq!(
+            literal.project.stories[0]
+                .passage_by_id(&PassageId::new("a"))
+                .unwrap()
+                .text,
+            "$1 $$ $1 $$"
+        );
+        assert_eq!(literal.project.stories[0].script, "$1 $$");
+        assert_eq!(literal.project.stories[0].stylesheet, "price");
+
+        let mut regex = session();
+        regex.project.stories[0]
+            .passage_by_id_mut(&PassageId::new("a"))
+            .unwrap()
+            .text = "😀 item-12\r\nitem-34".into();
+        regex.project.stories[0].script = "item-56".into();
+        let runtime = refactor_runtime(&regex);
+        let summary = complete_project_replace_plan(
+            &mut regex,
+            PlanProjectReplaceRequest {
+                story_id: "story-1".into(),
+                query: r"item-(\d+)".into(),
+                replacement: "$1:$1".into(),
+                include_passage_names: false,
+                include_passage_text: true,
+                include_script: true,
+                include_stylesheet: false,
+                match_case: true,
+                use_regexes: true,
+            },
+            &runtime,
+        );
+        let page = regex
+            .refactor_plan_detail_page(&summary.first_detail_cursor)
+            .expect("Unicode review page");
+        assert!(page.changes.iter().any(|change| {
+            change.location.as_ref().is_some_and(|location| {
+                location.span.encoding == RefactorRangeEncoding::Utf16CodeUnits
+                    && location.span.start == 3
+            })
+        }));
+        regex
+            .apply_refactor_plan(
+                &RefactorPlanApplyRequest {
+                    plan_id: summary.plan_id,
+                    expected_project_revision: runtime.project_revision,
+                    selection: RefactorPlanSelection::All,
+                },
+                &runtime,
+            )
+            .expect("apply regex capture replacement");
+        assert_eq!(
+            regex.project.stories[0]
+                .passage_by_id(&PassageId::new("a"))
+                .unwrap()
+                .text,
+            "😀 12:12\r\n34:34"
+        );
+        assert_eq!(regex.project.stories[0].script, "56:56");
+    }
+
+    #[test]
+    fn project_replace_deduplicates_name_link_matches_and_keeps_required_groups_atomic() {
+        let mut session = session();
+        session.project.stories[0]
+            .passage_by_id_mut(&PassageId::new("a"))
+            .unwrap()
+            .text = "[[Next]] and Next".into();
+        let runtime = refactor_runtime(&session);
+        let summary = complete_project_replace_plan(
+            &mut session,
+            PlanProjectReplaceRequest {
+                story_id: "story-1".into(),
+                query: "Next".into(),
+                replacement: "Continue".into(),
+                include_passage_names: true,
+                include_passage_text: true,
+                include_script: false,
+                include_stylesheet: false,
+                match_case: true,
+                use_regexes: false,
+            },
+            &runtime,
+        );
+        assert_eq!(summary.change_count, 3, "the link target is planned once");
+        let page = session
+            .refactor_plan_detail_page(&summary.first_detail_cursor)
+            .expect("grouped details");
+        assert_eq!(
+            page.changes
+                .iter()
+                .filter(|change| change.group_id.is_some())
+                .count(),
+            2
+        );
+        let ungrouped = page
+            .changes
+            .iter()
+            .find(|change| change.group_id.is_none())
+            .expect("plain text match remains independently selectable")
+            .change_id
+            .clone();
+        let rename = page
+            .changes
+            .iter()
+            .find(|change| change.kind == RefactorPlanChangeKind::RenamePassage)
+            .expect("rename detail");
+        assert_eq!(
+            session
+                .apply_refactor_plan(
+                    &RefactorPlanApplyRequest {
+                        plan_id: summary.plan_id.clone(),
+                        expected_project_revision: runtime.project_revision,
+                        selection: RefactorPlanSelection::Only {
+                            change_ids: vec![rename.change_id.clone()],
+                        },
+                    },
+                    &runtime,
+                )
+                .expect_err("required rename/link group cannot be split")
+                .code,
+            RefactorPlanFailureCode::InvalidSelection
+        );
+        session
+            .apply_refactor_plan(
+                &RefactorPlanApplyRequest {
+                    plan_id: summary.plan_id,
+                    expected_project_revision: runtime.project_revision,
+                    selection: RefactorPlanSelection::AllExcept {
+                        change_ids: vec![ungrouped],
+                    },
+                },
+                &runtime,
+            )
+            .expect("apply required group while excluding plain text occurrence");
+        let story = &session.project.stories[0];
+        assert_eq!(
+            story.passage_by_id(&PassageId::new("b")).unwrap().name,
+            "Continue"
+        );
+        assert_eq!(
+            story.passage_by_id(&PassageId::new("a")).unwrap().text,
+            "[[Continue]] and Next"
+        );
+    }
+
+    #[test]
+    fn project_replace_validates_requests_and_releases_cancelled_or_stale_tasks() {
+        let mut session = session();
+        let runtime = refactor_runtime(&session);
+        let request = |query: &str| PlanProjectReplaceRequest {
+            story_id: "story-1".into(),
+            query: query.into(),
+            replacement: "replacement".into(),
+            include_passage_names: false,
+            include_passage_text: true,
+            include_script: false,
+            include_stylesheet: false,
+            match_case: true,
+            use_regexes: true,
+        };
+        assert_eq!(
+            session
+                .begin_project_replace_plan(request("["), runtime.clone())
+                .expect_err("invalid regex")
+                .code,
+            RefactorPlanFailureCode::InvalidPlan
+        );
+        let mut no_scope = request("Next");
+        no_scope.include_passage_text = false;
+        assert_eq!(
+            session
+                .begin_project_replace_plan(no_scope, runtime.clone())
+                .expect_err("empty source scope")
+                .code,
+            RefactorPlanFailureCode::InvalidPlan
+        );
+        let mut duplicate_names = request("Start|Next");
+        duplicate_names.replacement = "Same".into();
+        duplicate_names.include_passage_names = true;
+        duplicate_names.include_passage_text = false;
+        assert_eq!(
+            session
+                .begin_project_replace_plan(duplicate_names, runtime.clone())
+                .expect_err("duplicate resulting passage names")
+                .code,
+            RefactorPlanFailureCode::InvalidPlan
+        );
+        let mut empty_name = request("Next");
+        empty_name.replacement.clear();
+        empty_name.include_passage_names = true;
+        empty_name.include_passage_text = false;
+        assert_eq!(
+            session
+                .begin_project_replace_plan(empty_name, runtime.clone())
+                .expect_err("empty resulting passage name")
+                .code,
+            RefactorPlanFailureCode::InvalidPlan
+        );
+        let cancelled = session
+            .begin_project_replace_plan(request("Next"), runtime.clone())
+            .expect("begin cancellable replacement");
+        assert!(session.cancel_project_replace_plan(&cancelled));
+        assert!(matches!(
+            session.continue_project_replace_plan(&cancelled),
+            PlanProjectReplaceResult::Cancelled
+        ));
+        let stale = session
+            .begin_project_replace_plan(request("Next"), runtime)
+            .expect("begin stale replacement");
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                story_id: "story-1".into(),
+                passage_id: "a".into(),
+                text: "changed while planning".into(),
+            })
+            .expect("competing mutation");
+        assert!(matches!(
+            session.continue_project_replace_plan(&stale),
+            PlanProjectReplaceResult::Failure { failure }
+                if failure.code == RefactorPlanFailureCode::StaleProjectRevision
+        ));
+        let diagnostics = session.performance_diagnostics();
+        assert_eq!(diagnostics.refactor_planning_task_count, 0);
+        assert_eq!(diagnostics.refactor_planning_task_bytes, 0);
+    }
+
+    #[test]
+    fn project_replace_name_validation_bounds_peak_provisional_memory_at_10k_and_50k() {
+        for passage_count in [10_000usize, 50_000] {
+            let mut session = session();
+            session.project.stories[0].passages = (0..passage_count)
+                .map(|index| {
+                    passage(
+                        &format!("name-{index:05}"),
+                        &format!("needle-{index:05}"),
+                        "",
+                        index as f64,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .into();
+            let runtime = refactor_runtime(&session);
+            let _limit = refactor::scoped_test_plan_store_byte_limit(1_024);
+            let error = session
+                .begin_project_replace_plan(
+                    PlanProjectReplaceRequest {
+                        story_id: "story-1".into(),
+                        query: "needle".into(),
+                        replacement: "result".into(),
+                        include_passage_names: true,
+                        include_passage_text: false,
+                        include_script: false,
+                        include_stylesheet: false,
+                        match_case: true,
+                        use_regexes: false,
+                    },
+                    runtime,
+                )
+                .expect_err("provisional name set must be peak-budgeted");
+            assert_eq!(error.code, RefactorPlanFailureCode::PlanTooLarge);
+            let diagnostics = session.performance_diagnostics();
+            assert_eq!(diagnostics.refactor_planning_task_count, 0);
+            assert_eq!(diagnostics.refactor_planning_task_bytes, 0);
+        }
+    }
+
+    #[test]
+    fn project_replace_name_validation_rejects_when_final_retained_name_crosses_peak_budget() {
+        let mut session = session();
+        session.project.stories[0].passages =
+            vec![passage("a", "a1", "", 0.0), passage("b", "a2", "", 100.0)].into();
+        // The second retained map entry is individually within this limit, but
+        // its coexistence with both provisional set entries is not.
+        let _limit = refactor::scoped_test_plan_store_byte_limit(1_700);
+        let error = session
+            .begin_project_replace_plan(
+                PlanProjectReplaceRequest {
+                    story_id: "story-1".into(),
+                    query: "a".into(),
+                    replacement: "x".into(),
+                    include_passage_names: true,
+                    include_passage_text: false,
+                    include_script: false,
+                    include_stylesheet: false,
+                    match_case: true,
+                    use_regexes: false,
+                },
+                refactor_runtime(&session),
+            )
+            .expect_err("last retained name must be peak-budgeted");
+        assert_eq!(error.code, RefactorPlanFailureCode::PlanTooLarge);
+        let diagnostics = session.performance_diagnostics();
+        assert_eq!(diagnostics.refactor_planning_task_count, 0);
+        assert_eq!(diagnostics.refactor_planning_task_bytes, 0);
+    }
+
+    #[test]
+    fn project_replace_name_validation_detects_collision_with_an_unchanged_late_name() {
+        let mut session = session();
+        session.project.stories[0].passages = vec![
+            passage("a", "needle", "", 0.0),
+            passage("b", "unchanged", "", 100.0),
+            passage("c", "result", "", 200.0),
+        ]
+        .into();
+        let error = session
+            .begin_project_replace_plan(
+                PlanProjectReplaceRequest {
+                    story_id: "story-1".into(),
+                    query: "needle".into(),
+                    replacement: "result".into(),
+                    include_passage_names: true,
+                    include_passage_text: false,
+                    include_script: false,
+                    include_stylesheet: false,
+                    match_case: true,
+                    use_regexes: false,
+                },
+                refactor_runtime(&session),
+            )
+            .expect_err("unchanged names participate in duplicate validation");
+        assert_eq!(error.code, RefactorPlanFailureCode::InvalidPlan);
+        let diagnostics = session.performance_diagnostics();
+        assert_eq!(diagnostics.refactor_planning_task_count, 0);
+        assert_eq!(diagnostics.refactor_planning_task_bytes, 0);
+    }
+
+    #[test]
+    fn sparse_passage_rename_combines_target_edits_and_preserves_indexes_history_and_failures() {
+        let mut session = session();
+        let after_name = "Néxt🚀";
+        let source_text = "😀\r\n[[Next]] [[Label->Next]] [[Next<-Back]]";
+        let target_text = "Target\r\n[[Next]]";
+        session.project.stories[0]
+            .passage_by_id_mut(&PassageId::new("a"))
+            .unwrap()
+            .text = source_text.into();
+        session.project.stories[0]
+            .passage_by_id_mut(&PassageId::new("b"))
+            .unwrap()
+            .text = target_text.into();
+        let changes = source_text
+            .match_indices("Next")
+            .map(|(start_utf8_byte, _)| CanonicalPlanChange::TextEdit {
+                source: CanonicalSourceIdentity::Passage {
+                    story_id: "story-1".into(),
+                    passage_id: "a".into(),
+                },
+                range: RefactorTextRange {
+                    start_utf8_byte,
+                    end_utf8_byte: start_utf8_byte + "Next".len(),
+                },
+                expected_text: "Next".into(),
+                replacement_text: after_name.into(),
+            })
+            .chain(std::iter::once(CanonicalPlanChange::TextEdit {
+                source: CanonicalSourceIdentity::Passage {
+                    story_id: "story-1".into(),
+                    passage_id: "b".into(),
+                },
+                range: RefactorTextRange {
+                    start_utf8_byte: target_text.find("Next").unwrap(),
+                    end_utf8_byte: target_text.find("Next").unwrap() + "Next".len(),
+                },
+                expected_text: "Next".into(),
+                replacement_text: after_name.into(),
+            }))
+            .chain(std::iter::once(CanonicalPlanChange::RenamePassage {
+                story_id: "story-1".into(),
+                passage_id: "b".into(),
+                before_name: "Next".into(),
+                after_name: after_name.into(),
+            }))
+            .collect::<Vec<_>>();
+        let sparse = refactor::sparse_passage_rename_delta(
+            &session.project,
+            "passage-rename",
+            &changes,
+            None,
+        )
+        .expect("validated sparse delta")
+        .expect("specialized rename shape");
+        assert_eq!(sparse.len(), 2, "target rename and edit share one snapshot");
+        assert!(sparse.iter().any(|change| {
+            change.passage_id == PassageId::new("b")
+                && change.after.name == after_name
+                && change.after.text == "Target\r\n[[Néxt🚀]]"
+        }));
+        let runtime = refactor_runtime(&session);
+        let summary = session
+            .plan_refactor(refactor_draft(&session, changes))
+            .expect("plan sparse rename");
+        let before = session.project.clone();
+        session
+            .apply_refactor_plan(
+                &RefactorPlanApplyRequest {
+                    plan_id: summary.plan_id,
+                    expected_project_revision: runtime.project_revision,
+                    selection: RefactorPlanSelection::All,
+                },
+                &runtime,
+            )
+            .expect("apply sparse rename");
+        let story = &session.project.stories[0];
+        assert_eq!(
+            story.passage_by_id(&PassageId::new("a")).unwrap().text,
+            "😀\r\n[[Néxt🚀]] [[Label->Néxt🚀]] [[Néxt🚀<-Back]]"
+        );
+        assert_eq!(
+            story.passage_by_id(&PassageId::new("b")).unwrap().text,
+            "Target\r\n[[Néxt🚀]]"
+        );
+        assert_eq!(
+            story.passage_by_name(after_name).unwrap().id,
+            PassageId::new("b")
+        );
+        assert!(story.passage_by_name("Next").is_none());
+        assert_eq!(story.passage_by_id(&PassageId::new("c")).unwrap().text, "");
+        assert_eq!(
+            story
+                .passages
+                .iter()
+                .map(|passage| passage.id.as_ref())
+                .collect::<Vec<_>>(),
+            vec!["a", "b", "c"],
+            "sparse apply must not reorder passages"
+        );
+        let applied = session.project.clone();
+        session.undo().expect("undo sparse rename");
+        assert_eq!(session.project, before);
+        session.redo().expect("redo sparse rename");
+        assert_eq!(session.project, applied);
+    }
+
+    #[test]
+    fn sparse_refactor_injected_failure_and_mixed_plan_fallback_leave_state_contracts_intact() {
+        let mut session = session();
+        let sparse_changes = vec![CanonicalPlanChange::RenamePassage {
+            story_id: "story-1".into(),
+            passage_id: "b".into(),
+            before_name: "Next".into(),
+            after_name: "Continue".into(),
+        }];
+        let runtime = refactor_runtime(&session);
+        let summary = session
+            .plan_refactor(refactor_draft(&session, sparse_changes))
+            .expect("plan sparse rename");
+        let before = session.clone();
+        session.inject_refactor_failure(RefactorFailureInjection::Child(0));
+        assert_eq!(
+            session
+                .apply_refactor_plan(
+                    &RefactorPlanApplyRequest {
+                        plan_id: summary.plan_id.clone(),
+                        expected_project_revision: runtime.project_revision,
+                        selection: RefactorPlanSelection::All,
+                    },
+                    &runtime,
+                )
+                .expect_err("injected sparse failure")
+                .code,
+            RefactorPlanFailureCode::InvalidPlan
+        );
+        assert_eq!(format!("{session:#?}"), format!("{before:#?}"));
+
+        let mixed = canonical_refactor_changes(&session);
+        assert!(
+            refactor::sparse_passage_rename_delta(
+                &session.project,
+                "passage-rename",
+                &mixed,
+                None,
+            )
+                .expect("mixed plan remains valid")
+                .is_none(),
+            "structural plans must retain the generic candidate-project path"
+        );
+
+        let same_shape_different_operation = vec![CanonicalPlanChange::RenamePassage {
+            story_id: "story-1".into(),
+            passage_id: "b".into(),
+            before_name: "Next".into(),
+            after_name: "Continue".into(),
+        }];
+        assert!(
+            refactor::sparse_passage_rename_delta(
+                &session.project,
+                "test-project-operation",
+                &same_shape_different_operation,
+                None,
+            )
+            .expect("same-shape non-rename remains valid")
+            .is_none(),
+            "only the attributed passage-rename operation may use the sparse path"
+        );
+
+        let mut stale_session = ProjectSession::new(session.project.clone());
+        let stale_changes = vec![CanonicalPlanChange::RenamePassage {
+            story_id: "story-1".into(),
+            passage_id: "b".into(),
+            before_name: "Next".into(),
+            after_name: "Continue".into(),
+        }];
+        assert!(
+            refactor::sparse_passage_rename_delta(
+                &stale_session.project,
+                "passage-rename",
+                &stale_changes,
+                None,
+            )
+            .expect("validate sparse stale plan")
+            .is_some()
+        );
+        let stale_runtime = refactor_runtime(&stale_session);
+        let stale_summary = stale_session
+            .plan_refactor(refactor_draft(&stale_session, stale_changes))
+            .expect("plan sparse stale rename");
+        stale_session
+            .apply(StoryCommand::UpdatePassageText {
+                story_id: "story-1".into(),
+                passage_id: "c".into(),
+                text: "unrelated committed edit".into(),
+            })
+            .expect("unrelated mutation");
+        let after_unrelated = stale_session.project.clone();
+        assert_eq!(
+            stale_session
+                .apply_refactor_plan(
+                    &RefactorPlanApplyRequest {
+                        plan_id: stale_summary.plan_id,
+                        expected_project_revision: stale_runtime.project_revision,
+                        selection: RefactorPlanSelection::All,
+                    },
+                    &stale_runtime,
+                )
+                .expect_err("stale sparse plan")
+                .code,
+            RefactorPlanFailureCode::StaleProjectRevision
+        );
+        assert_eq!(stale_session.project, after_unrelated);
+    }
+
+    #[test]
+    fn passage_rename_planning_cancellation_staleness_and_session_isolation() {
+        let mut original = session();
+        let runtime = refactor_runtime(&original);
+        let task = original
+            .begin_passage_rename_plan(
+                PlanPassageRenameRequest {
+                    story_id: "story-1".into(),
+                    passage_id: "b".into(),
+                    after_name: "next".into(),
+                },
+                runtime.clone(),
+            )
+            .expect("case-only rename is distinct");
+        let pending_diagnostics = original.performance_diagnostics();
+        assert_eq!(pending_diagnostics.refactor_planning_task_count, 1);
+        assert!(pending_diagnostics.refactor_planning_task_bytes > 0);
+        assert!(original.cancel_passage_rename_plan(&task));
+        let cancelled_diagnostics = original.performance_diagnostics();
+        assert_eq!(cancelled_diagnostics.refactor_planning_task_count, 0);
+        assert_eq!(cancelled_diagnostics.refactor_planning_task_bytes, 0);
+        assert!(matches!(
+            original.continue_passage_rename_plan(&task),
+            PlanPassageRenameResult::Cancelled
+        ));
+
+        let stale_task = original
+            .begin_passage_rename_plan(
+                PlanPassageRenameRequest {
+                    story_id: "story-1".into(),
+                    passage_id: "b".into(),
+                    after_name: "Néxt".into(),
+                },
+                runtime,
+            )
+            .expect("begin stale task");
+        original
+            .apply(StoryCommand::UpdatePassageText {
+                story_id: "story-1".into(),
+                passage_id: "a".into(),
+                text: "changed between planning chunks".into(),
+            })
+            .expect("unrelated mutation");
+        assert!(matches!(
+            original.continue_passage_rename_plan(&stale_task),
+            PlanPassageRenameResult::Failure { failure }
+                if failure.code == RefactorPlanFailureCode::StaleProjectRevision
+        ));
+
+        let mut replacement = session();
+        assert!(matches!(
+            replacement.continue_passage_rename_plan(&stale_task),
+            PlanPassageRenameResult::Cancelled
+        ));
+        let decomposed = "Ne\u{301}xt";
+        replacement.project.stories[0].passages = vec![
+            passage("a", "Start", "", 0.0),
+            passage("b", "Next", "", 200.0),
+            passage("d", decomposed, "", 400.0),
+        ]
+        .into();
+        let replacement_runtime = refactor_runtime(&replacement);
+        assert!(
+            replacement
+                .begin_passage_rename_plan(
+                    PlanPassageRenameRequest {
+                        story_id: "story-1".into(),
+                        passage_id: "b".into(),
+                        after_name: "Néxt".into(),
+                    },
+                    replacement_runtime,
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn passage_rename_request_string_limit_is_utf8_exact_and_retains_no_task() {
+        let mut session = session();
+        let runtime = refactor_runtime(&session);
+        let fixed_bytes = "story-1".len() + "b".len();
+        let exact_after_name = "😀".repeat(
+            (refactor::MAX_PASSAGE_RENAME_REQUEST_STRING_BYTES_V1 - fixed_bytes) / "😀".len(),
+        );
+        let exact = PlanPassageRenameRequest {
+            story_id: "story-1".into(),
+            passage_id: "b".into(),
+            after_name: exact_after_name.clone(),
+        };
+        assert_eq!(
+            refactor::passage_rename_request_string_bytes(&exact),
+            refactor::MAX_PASSAGE_RENAME_REQUEST_STRING_BYTES_V1
+        );
+        let task = session
+            .begin_passage_rename_plan(exact, runtime.clone())
+            .expect("exact UTF-8 request limit is accepted");
+        assert!(session.cancel_passage_rename_plan(&task));
+
+        let oversized = PlanPassageRenameRequest {
+            story_id: "story-1".into(),
+            passage_id: "b".into(),
+            after_name: format!("{exact_after_name}x"),
+        };
+        assert_eq!(
+            refactor::passage_rename_request_string_bytes(&oversized),
+            refactor::MAX_PASSAGE_RENAME_REQUEST_STRING_BYTES_V1 + 1
+        );
+        assert_eq!(
+            session
+                .begin_passage_rename_plan(oversized, runtime)
+                .expect_err("one UTF-8 character over the limit")
+                .code,
+            RefactorPlanFailureCode::PlanTooLarge
+        );
+        let diagnostics = session.performance_diagnostics();
+        assert_eq!(diagnostics.refactor_planning_task_count, 0);
+        assert_eq!(diagnostics.refactor_planning_task_bytes, 0);
+    }
+
+    #[test]
+    fn passage_rename_planner_releases_the_sole_task_for_staleness_and_later_planning() {
+        let mut session = session();
+        let runtime = refactor_runtime(&session);
+        let first = session
+            .begin_passage_rename_plan(
+                PlanPassageRenameRequest {
+                    story_id: "story-1".into(),
+                    passage_id: "b".into(),
+                    after_name: "First".into(),
+                },
+                runtime.clone(),
+            )
+            .expect("first planner starts");
+        assert_eq!(
+            session
+                .begin_passage_rename_plan(
+                    PlanPassageRenameRequest {
+                        story_id: "story-1".into(),
+                        passage_id: "b".into(),
+                        after_name: "Second".into(),
+                    },
+                    runtime.clone(),
+                )
+                .expect_err("only one planner is retained")
+                .code,
+            RefactorPlanFailureCode::PlanTooLarge
+        );
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                story_id: "story-1".into(),
+                passage_id: "a".into(),
+                text: "planner invalidated".into(),
+            })
+            .expect("project mutation");
+        assert!(matches!(
+            session.continue_passage_rename_plan(&first),
+            PlanPassageRenameResult::Failure { failure }
+                if failure.code == RefactorPlanFailureCode::StaleProjectRevision
+        ));
+        assert_eq!(
+            session
+                .performance_diagnostics()
+                .refactor_planning_task_count,
+            0
+        );
+        let later = session
+            .begin_passage_rename_plan(
+                PlanPassageRenameRequest {
+                    story_id: "story-1".into(),
+                    passage_id: "b".into(),
+                    after_name: "Later".into(),
+                },
+                refactor_runtime(&session),
+            )
+            .expect("later planner starts after stale task removal");
+        assert!(session.cancel_passage_rename_plan(&later));
+        let diagnostics = session.performance_diagnostics();
+        assert_eq!(diagnostics.refactor_planning_task_count, 0);
+        assert_eq!(diagnostics.refactor_planning_task_bytes, 0);
+    }
+
+    #[test]
+    fn refactor_apply_reports_success_only_stage_timings() {
+        let mut session = session_with_warm_refactor_caches();
+        let runtime = refactor_runtime(&session);
+        let summary = session
+            .plan_refactor(refactor_draft(
+                &session,
+                canonical_refactor_changes(&session),
+            ))
+            .expect("plan");
+        let request = RefactorPlanApplyRequest {
+            plan_id: summary.plan_id.clone(),
+            expected_project_revision: runtime.project_revision,
+            selection: RefactorPlanSelection::All,
+        };
+
+        session
+            .apply_refactor_plan(&request, &runtime)
+            .expect("apply refactor plan");
+
+        let timing = session
+            .performance_diagnostics()
+            .last_mutation
+            .expect("successful refactor apply should expose stage timings");
+        assert_eq!(timing.operation, "refactorPlan");
+        assert_eq!(timing.delta_id, summary.plan_id);
+        assert_eq!(timing.revision, session.revision());
+        let stage_values = [
+            timing.total_ms,
+            timing.lookup_and_delta_ms,
+            timing.project_mutation_ms,
+            timing.fingerprint_ms,
+            timing.graph_ms,
+            timing.analysis_ms,
+            timing.read_model_ms,
+            timing.history_ms,
+            timing.patch_finalize_ms,
+            timing.savepoint_ms,
+        ];
+        assert!(
+            stage_values
+                .iter()
+                .all(|value| value.is_finite() && *value >= 0.0)
+        );
+        let stage_sum = timing.lookup_and_delta_ms
+            + timing.project_mutation_ms
+            + timing.fingerprint_ms
+            + timing.graph_ms
+            + timing.analysis_ms
+            + timing.read_model_ms
+            + timing.history_ms
+            + timing.patch_finalize_ms
+            + timing.savepoint_ms;
+        assert!(stage_sum <= timing.total_ms + 0.1);
+
+        let reused_runtime = refactor_runtime(&session);
+        assert_eq!(
+            session
+                .apply_refactor_plan(&request, &reused_runtime)
+                .expect_err("consumed plan should not apply twice")
+                .code,
+            RefactorPlanFailureCode::PlanEvicted
+        );
+        assert!(
+            session.performance_diagnostics().last_mutation.is_none(),
+            "failed refactor apply must clear the prior successful timing"
+        );
+    }
+
+    #[test]
+    fn canonical_refactor_failures_at_each_child_and_derived_stage_roll_back_fully() {
+        let change_count = canonical_refactor_changes(&session()).len();
+        for failure in (0..change_count)
+            .map(RefactorFailureInjection::Child)
+            .chain(
+                [
+                    DerivedRefactorFailureStage::PassageNameIndex,
+                    DerivedRefactorFailureStage::Fingerprints,
+                    DerivedRefactorFailureStage::GraphCache,
+                    DerivedRefactorFailureStage::BacklinkCache,
+                    DerivedRefactorFailureStage::ContentsCatalog,
+                    DerivedRefactorFailureStage::AnalysisCache,
+                    DerivedRefactorFailureStage::ReadModelCache,
+                ]
+                .into_iter()
+                .map(RefactorFailureInjection::Derived),
+            )
+        {
+            let mut session = session_with_warm_refactor_caches();
+            let sparse_refactor = matches!(failure, RefactorFailureInjection::Derived(_));
+            let before = session.project.clone();
+            let untouched_story_id = StoryId::new("story-2");
+            let untouched_graph = format!("{:#?}", session.graph_cache.get(&untouched_story_id));
+            let untouched_backlinks =
+                format!("{:#?}", session.backlink_cache.get(&untouched_story_id));
+            let untouched_contents = format!(
+                "{:#?}",
+                session.contents_catalog_cache.get(&untouched_story_id)
+            );
+            let untouched_analysis =
+                format!("{:#?}", session.analysis_cache.get(&untouched_story_id));
+            let untouched_read_model =
+                format!("{:#?}", session.read_model_cache.get(&untouched_story_id));
+            let untouched_backlink_lru = session
+                .backlink_cache_lru
+                .iter()
+                .filter(|(story_id, _)| story_id == &untouched_story_id)
+                .cloned()
+                .collect::<Vec<_>>();
+            let backlink_cache_hit_count = session.backlink_cache_hit_count;
+            let runtime = refactor_runtime(&session);
+            let summary = session
+                .plan_refactor(if sparse_refactor {
+                    sparse_refactor_draft(&session)
+                } else {
+                    refactor_draft(&session, canonical_refactor_changes(&session))
+                })
+                .expect("plan");
+            session.inject_refactor_failure(failure);
+            let mut expected_session = session.clone();
+            expected_session.refactor_failure_injection = None;
+            let result = session.apply_refactor_plan(
+                &RefactorPlanApplyRequest {
+                    plan_id: summary.plan_id.clone(),
+                    expected_project_revision: runtime.project_revision,
+                    selection: RefactorPlanSelection::All,
+                },
+                &runtime,
+            );
+
+            assert_eq!(
+                result.unwrap_err().code,
+                RefactorPlanFailureCode::InvalidPlan
+            );
+            assert!(
+                session.performance_diagnostics().last_mutation.is_none(),
+                "failed refactor apply must not publish partial timings"
+            );
+            assert_eq!(session.project, before);
+            assert_eq!(session.revision(), 1);
+            assert!(session.undo_stack.is_empty());
+            assert!(session.redo_stack.is_empty());
+            assert!(!session.dirty);
+            assert_eq!(format!("{session:#?}"), format!("{expected_session:#?}"));
+            assert_eq!(
+                format!("{:#?}", session.graph_cache.get(&untouched_story_id)),
+                untouched_graph
+            );
+            assert_eq!(
+                format!("{:#?}", session.backlink_cache.get(&untouched_story_id)),
+                untouched_backlinks
+            );
+            assert_eq!(
+                format!(
+                    "{:#?}",
+                    session.contents_catalog_cache.get(&untouched_story_id)
+                ),
+                untouched_contents
+            );
+            assert_eq!(
+                format!("{:#?}", session.analysis_cache.get(&untouched_story_id)),
+                untouched_analysis
+            );
+            assert_eq!(
+                format!("{:#?}", session.read_model_cache.get(&untouched_story_id)),
+                untouched_read_model
+            );
+            assert_eq!(
+                session
+                    .backlink_cache_lru
+                    .iter()
+                    .filter(|(story_id, _)| story_id == &untouched_story_id)
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                untouched_backlink_lru
+            );
+            assert_eq!(session.backlink_cache_hit_count, backlink_cache_hit_count);
+            assert_eq!(
+                session
+                    .performance_diagnostics()
+                    .refactor_plan_store_entry_count,
+                1
+            );
+            let batch = session
+                .apply_refactor_plan(
+                    &RefactorPlanApplyRequest {
+                        plan_id: summary.plan_id,
+                        expected_project_revision: runtime.project_revision,
+                        selection: RefactorPlanSelection::All,
+                    },
+                    &runtime,
+                )
+                .expect("retry after injected failure");
+            assert!(session.dirty);
+            assert!(
+                batch
+                    .patches
+                    .iter()
+                    .any(|patch| matches!(patch, Patch::DirtyStateChanged { dirty: true }))
+            );
+            assert!(batch.patches.iter().any(|patch| matches!(
+                patch,
+                Patch::PassageUpdated {
+                    changes,
+                    passage_id,
+                    story_id,
+                } if story_id == "story-1"
+                    && passage_id == "b"
+                    && changes.name.as_deref() == Some("Continue")
+            )));
+            if !sparse_refactor {
+                assert!(batch.patches.iter().any(|patch| matches!(
+                    patch,
+                    Patch::PassageUpdated {
+                        changes,
+                        passage_id,
+                        story_id,
+                    } if story_id == "story-1"
+                        && passage_id == "a"
+                        && changes.text.as_deref()
+                            == Some("[[Continue]] [[Label->Next]] [[Next<-Back]]")
+                )));
+                assert!(batch.patches.iter().any(|patch| matches!(
+                    patch,
+                    Patch::PassageCreated { passage, story_id }
+                        if story_id == "story-1" && passage.id == "d" && passage.name == "Destination"
+                )));
+                assert!(batch.patches.iter().any(|patch| matches!(
+                    patch,
+                    Patch::PassageDeleted { passage_id, story_id }
+                        if story_id == "story-1" && passage_id == "c"
+                )));
+                assert!(batch.patches.iter().any(|patch| matches!(
+                    patch,
+                    Patch::StartPassageChanged { passage_id, story_id }
+                        if story_id == "story-1" && passage_id == "d"
+                )));
+                assert!(batch.patches.iter().any(|patch| matches!(
+                    patch,
+                    Patch::StoryMetadataUpdated { changes, story_id }
+                        if story_id == "story-1" && changes.name.as_deref() == Some("Revised")
+                )));
+                assert!(batch.patches.iter().any(|patch| matches!(
+                    patch,
+                    Patch::ProjectMetadataUpdated { changes, story_id }
+                        if story_id == "story-1" && changes.name.as_deref() == Some("Revised Project")
+                )));
+            }
+            assert_eq!(
+                session.project.stories[0]
+                    .passage_by_id(&PassageId::new("b"))
+                    .expect("renamed passage")
+                    .name,
+                "Continue"
+            );
+            if !sparse_refactor {
+                assert_eq!(
+                    session.project.stories[0]
+                        .passage_by_id(&PassageId::new("a"))
+                        .expect("edited passage")
+                        .text,
+                    "[[Continue]] [[Label->Next]] [[Next<-Back]]"
+                );
+            }
+            session
+                .contents_page("story-1", CoreContentsQuery::default())
+                .expect("affected contents catalog rebuild");
+            session
+                .contents_page(
+                    "story-1",
+                    CoreContentsQuery {
+                        filter: CoreContentsFilter::Diagnostics,
+                        ..CoreContentsQuery::default()
+                    },
+                )
+                .expect("affected derived caches rebuild");
+            assert!(session.graph_cache.contains_key(&StoryId::new("story-1")));
+            assert!(
+                session
+                    .contents_catalog_cache
+                    .contains_key(&StoryId::new("story-1"))
+            );
+            assert!(
+                session
+                    .analysis_cache
+                    .contains_key(&StoryId::new("story-1"))
+            );
+            assert!(
+                session
+                    .read_model_cache
+                    .contains_key(&StoryId::new("story-1"))
+            );
+            assert_eq!(
+                session
+                    .backlinks_page("story-1", "b", CoreBacklinksQuery::default())
+                    .expect("affected backlink cache rebuild")
+                    .total_count,
+                usize::from(!sparse_refactor)
+            );
+            assert_eq!(
+                format!("{:#?}", session.graph_cache.get(&untouched_story_id)),
+                untouched_graph
+            );
+            assert_eq!(
+                format!("{:#?}", session.backlink_cache.get(&untouched_story_id)),
+                untouched_backlinks
+            );
+            assert_eq!(
+                format!(
+                    "{:#?}",
+                    session.contents_catalog_cache.get(&untouched_story_id)
+                ),
+                untouched_contents
+            );
+            assert_eq!(
+                format!("{:#?}", session.analysis_cache.get(&untouched_story_id)),
+                untouched_analysis
+            );
+            assert_eq!(
+                format!("{:#?}", session.read_model_cache.get(&untouched_story_id)),
+                untouched_read_model
+            );
+            assert_eq!(session.backlink_cache_hit_count, backlink_cache_hit_count);
+            let applied = session.project.clone();
+            session.undo().expect("undo retried refactor");
+            assert_eq!(session.project, before);
+            session.redo().expect("redo retried refactor");
+            assert_eq!(session.project, applied);
+            assert_eq!(
+                session
+                    .backlinks_page("story-1", "b", CoreBacklinksQuery::default())
+                    .expect("redo affected backlink cache")
+                    .total_count,
+                usize::from(!sparse_refactor)
+            );
+            assert_eq!(
+                format!("{:#?}", session.graph_cache.get(&untouched_story_id)),
+                untouched_graph
+            );
+            assert_eq!(session.backlink_cache_hit_count, backlink_cache_hit_count);
+        }
+    }
+
+    #[test]
+    fn sparse_project_replace_failures_roll_back_every_derived_stage() {
+        for failure in std::iter::once(RefactorFailureInjection::Child(0)).chain(
+            [
+                DerivedRefactorFailureStage::Fingerprints,
+                DerivedRefactorFailureStage::GraphCache,
+                DerivedRefactorFailureStage::BacklinkCache,
+                DerivedRefactorFailureStage::ContentsCatalog,
+                DerivedRefactorFailureStage::AnalysisCache,
+                DerivedRefactorFailureStage::ReadModelCache,
+            ]
+            .into_iter()
+            .map(RefactorFailureInjection::Derived),
+        ) {
+            let mut session = session_with_warm_refactor_caches();
+            session.project.stories[0]
+                .passage_by_id_mut(&PassageId::new("a"))
+                .expect("passage")
+                .text = "needle".into();
+            session.project.stories[0].script = "needle".into();
+            session.project.stories[0].stylesheet = "needle".into();
+            let runtime = refactor_runtime(&session);
+            let summary = complete_project_replace_plan(
+                &mut session,
+                PlanProjectReplaceRequest {
+                    story_id: "story-1".into(),
+                    query: "needle".into(),
+                    replacement: "result".into(),
+                    include_passage_names: false,
+                    include_passage_text: true,
+                    include_script: true,
+                    include_stylesheet: true,
+                    match_case: true,
+                    use_regexes: false,
+                },
+                &runtime,
+            );
+            session.inject_refactor_failure(failure);
+            let mut expected = session.clone();
+            expected.refactor_failure_injection = None;
+            let error = session
+                .apply_refactor_plan(
+                    &RefactorPlanApplyRequest {
+                        plan_id: summary.plan_id,
+                        expected_project_revision: runtime.project_revision,
+                        selection: RefactorPlanSelection::All,
+                    },
+                    &runtime,
+                )
+                .expect_err("injected sparse project-replace failure");
+            assert_eq!(error.code, RefactorPlanFailureCode::InvalidPlan);
+            assert!(session.performance_diagnostics().last_mutation.is_none());
+            assert_eq!(format!("{session:#?}"), format!("{expected:#?}"));
+            assert_eq!(session.undo_stack.len(), 0);
+            assert_eq!(session.redo_stack.len(), 0);
+            assert_eq!(
+                session
+                    .performance_diagnostics()
+                    .refactor_plan_store_entry_count,
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_refactor_stale_revision_rejects_after_an_unrelated_mutation() {
+        let mut session = session();
+        let planned_runtime = refactor_runtime(&session);
+        let draft = refactor_draft(&session, canonical_refactor_changes(&session));
+        let summary = session.plan_refactor(draft).expect("plan");
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                passage_id: "b".into(),
+                story_id: "story-1".into(),
+                text: "unrelated committed edit".into(),
+            })
+            .expect("unrelated mutation");
+        let after_unrelated = session.project.clone();
+        let mut current_runtime = planned_runtime;
+        current_runtime.project_revision = 2;
+        let error = session
+            .apply_refactor_plan(
+                &RefactorPlanApplyRequest {
+                    plan_id: summary.plan_id,
+                    expected_project_revision: 1,
+                    selection: RefactorPlanSelection::All,
+                },
+                &current_runtime,
+            )
+            .unwrap_err();
+
+        assert_eq!(error.code, RefactorPlanFailureCode::StaleProjectRevision);
+        assert_eq!(session.project, after_unrelated);
+        assert_eq!(session.revision(), 2);
+        assert_eq!(session.undo_stack.len(), 1);
+    }
+
+    #[test]
+    fn canonical_refactor_handles_do_not_resolve_after_session_replacement() {
+        let mut original = session();
+        let original_runtime = refactor_runtime(&original);
+        let original_draft = refactor_draft(&original, canonical_refactor_changes(&original));
+        let old_summary = original.plan_refactor(original_draft).expect("old plan");
+
+        let mut replacement = session();
+        let replacement_runtime = refactor_runtime(&replacement);
+        let replacement_draft =
+            refactor_draft(&replacement, canonical_refactor_changes(&replacement));
+        let replacement_summary = replacement
+            .plan_refactor(replacement_draft)
+            .expect("replacement plan");
+        let before = replacement.project.clone();
+
+        assert_ne!(old_summary.plan_id, replacement_summary.plan_id);
+        assert_eq!(old_summary.plan_digest, replacement_summary.plan_digest);
+        assert_eq!(
+            original_runtime.project_revision,
+            replacement_runtime.project_revision
+        );
+        assert_eq!(
+            replacement
+                .apply_refactor_plan(
+                    &RefactorPlanApplyRequest {
+                        plan_id: old_summary.plan_id,
+                        expected_project_revision: replacement_runtime.project_revision,
+                        selection: RefactorPlanSelection::All,
+                    },
+                    &replacement_runtime,
+                )
+                .unwrap_err()
+                .code,
+            RefactorPlanFailureCode::PlanEvicted
+        );
+        assert_eq!(replacement.project, before);
+        assert_eq!(replacement.revision(), 1);
     }
 
     #[test]
@@ -14248,6 +17533,7 @@ mod tests {
                 | Patch::PassageCreated { story_id, .. }
                 | Patch::PassageDeleted { story_id, .. }
                 | Patch::PassageUpdated { story_id, .. }
+                | Patch::ProjectMetadataUpdated { story_id, .. }
                 | Patch::StartPassageChanged { story_id, .. }
                 | Patch::StoryDeleted { story_id }
                 | Patch::StoryIndexUpdated { story_id, .. }
@@ -14315,6 +17601,174 @@ mod tests {
                 }
             }
         );
+    }
+
+    #[test]
+    fn ordinary_text_edit_preserves_index_order_history_and_timing() {
+        let mut session = session();
+        let before = session.project.clone();
+        let before_order = session.project.stories[0]
+            .passages
+            .iter()
+            .map(|passage| passage.id.clone())
+            .collect::<Vec<_>>();
+        let unrelated_passages = ["b", "c"].map(|id| {
+            session.project.stories[0]
+                .passage_by_id(&PassageId::new(id))
+                .expect("unrelated passage")
+                .clone()
+        });
+
+        let batch = session
+            .apply(StoryCommand::UpdatePassageText {
+                story_id: "story-1".into(),
+                passage_id: "a".into(),
+                text: "ordinary local edit".into(),
+            })
+            .expect("ordinary text update should apply");
+
+        assert_no_snapshot_replacement(&batch.patches);
+        assert_eq!(
+            touched_passage_ids(&batch.patches),
+            BTreeSet::from(["a".into()])
+        );
+        let story = &session.project.stories[0];
+        assert_eq!(
+            story
+                .passages
+                .iter()
+                .map(|passage| passage.id.clone())
+                .collect::<Vec<_>>(),
+            before_order
+        );
+        assert_eq!(
+            story.passage_by_name("Start").map(|passage| &passage.id),
+            Some(&PassageId::new("a"))
+        );
+        assert_eq!(
+            story.passage_by_name("Next").map(|passage| &passage.id),
+            Some(&PassageId::new("b"))
+        );
+        assert_eq!(
+            story.passage_by_name("Loose").map(|passage| &passage.id),
+            Some(&PassageId::new("c"))
+        );
+        assert_eq!(story.passages.rank_of(&PassageId::new("a")), Some(0));
+        assert_eq!(story.passages.rank_of(&PassageId::new("b")), Some(1));
+        assert_eq!(story.passages.rank_of(&PassageId::new("c")), Some(2));
+        assert_eq!(
+            story.passage_by_id(&PassageId::new("b")),
+            Some(&unrelated_passages[0])
+        );
+        assert_eq!(
+            story.passage_by_id(&PassageId::new("c")),
+            Some(&unrelated_passages[1])
+        );
+        let timing = session
+            .performance_diagnostics()
+            .last_mutation
+            .expect("ordinary text update should record timing");
+        assert_eq!(timing.operation, "localPassageText");
+        assert_eq!(timing.revision, session.revision());
+        assert!(timing.project_mutation_ms.is_finite());
+        assert!(timing.project_mutation_ms >= 0.0);
+
+        let applied = session.project.clone();
+        session.undo().expect("ordinary text update should undo");
+        assert_eq!(session.project, before);
+        session.redo().expect("ordinary text update should redo");
+        assert_eq!(session.project, applied);
+    }
+
+    #[test]
+    fn local_passage_text_reports_incremental_stage_timings_without_stale_no_op_data() {
+        let mut session = session();
+
+        let initial_backlinks = session
+            .backlinks_page("story-1", "b", CoreBacklinksQuery::default())
+            .expect("initial backlink page");
+        assert_eq!(initial_backlinks.total_count, 1);
+        session
+            .contents_page(
+                "story-1",
+                CoreContentsQuery {
+                    filter: CoreContentsFilter::Diagnostics,
+                    ..CoreContentsQuery::default()
+                },
+            )
+            .expect("initial page should populate source and read-model caches");
+        let initial_parse_count = session.analysis_parse_count;
+
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                story_id: "story-1".into(),
+                passage_id: "a".into(),
+                text: "Local edit".into(),
+            })
+            .expect("local text update should apply");
+
+        let timing = session
+            .performance_diagnostics()
+            .last_mutation
+            .expect("local text update should expose stage timings");
+        assert_eq!(timing.operation, "localPassageText");
+        assert_eq!(timing.revision, session.revision());
+        assert_eq!(timing.graph_parsed_source_count, 1);
+        let stage_values = [
+            timing.total_ms,
+            timing.lookup_and_delta_ms,
+            timing.project_mutation_ms,
+            timing.fingerprint_ms,
+            timing.graph_ms,
+            timing.analysis_ms,
+            timing.read_model_ms,
+            timing.history_ms,
+            timing.patch_finalize_ms,
+        ];
+        assert!(
+            stage_values
+                .iter()
+                .all(|value| value.is_finite() && *value >= 0.0)
+        );
+        let stage_sum = timing.lookup_and_delta_ms
+            + timing.project_mutation_ms
+            + timing.fingerprint_ms
+            + timing.graph_ms
+            + timing.analysis_ms
+            + timing.read_model_ms
+            + timing.history_ms
+            + timing.patch_finalize_ms;
+        assert!(stage_sum <= timing.total_ms + 0.1);
+        assert_eq!(session.analysis_parse_count, initial_parse_count + 1);
+        assert_eq!(session.read_model_full_build_count, 1);
+        assert_eq!(session.read_model_incremental_update_count, 1);
+        assert_eq!(session.read_model_last_touched_source_count, 1);
+        assert!(session.can_undo());
+
+        let updated_backlinks = session
+            .backlinks_page("story-1", "b", CoreBacklinksQuery::default())
+            .expect("updated backlink page");
+        assert_eq!(updated_backlinks.total_count, 0);
+        session.undo().expect("local text update should undo");
+        assert_eq!(session.read_model_full_build_count, 1);
+        assert_eq!(session.read_model_incremental_update_count, 2);
+
+        let original_text = session
+            .story("story-1")
+            .expect("story")
+            .passage_by_id(&PassageId::new("a"))
+            .expect("passage")
+            .text
+            .clone();
+        let no_op = session
+            .apply(StoryCommand::UpdatePassageText {
+                story_id: "story-1".into(),
+                passage_id: "a".into(),
+                text: original_text,
+            })
+            .expect("no-op local text update should succeed");
+        assert!(no_op.patches.is_empty());
+        assert!(session.performance_diagnostics().last_mutation.is_none());
     }
 
     #[test]
@@ -16648,6 +20102,255 @@ mod tests {
             },
         );
         assert_eq!(stale, Err(CoreError::StaleReadModelCursor));
+    }
+
+    #[test]
+    fn passage_references_keep_every_occurrence_utf16_span_and_stale_cursor() {
+        let mut session = session();
+        let source = session
+            .project
+            .stories
+            .iter_mut()
+            .find(|story| story.id.as_ref() == "story-1")
+            .expect("story")
+            .passage_by_id_mut(&PassageId::new("a"))
+            .expect("source");
+        source.text = "😀[[ Next ]]\r\n[[Next]][[Next]] e\u{301} [[Next]] Ж[[Next]]".into();
+
+        let first = session
+            .passage_references_page(
+                "story-1",
+                "b",
+                CorePassageReferencesQuery {
+                    cursor: None,
+                    limit: 2,
+                },
+            )
+            .expect("references");
+        assert_eq!(first.total_count, 5);
+        assert_eq!(
+            first.coverage,
+            CorePassageReferenceCoverage::StandardLinksOnly
+        );
+        assert_eq!(first.references.len(), 2);
+        assert_eq!(first.references[0].location.span.start, 5);
+        assert_eq!(first.references[0].location.span.end, 9);
+        assert_eq!(
+            first.references[0].location.provenance.provider_identifier,
+            "twine-core.standard-links"
+        );
+        assert_ne!(
+            first.references[0].location.result_key,
+            first.references[1].location.result_key
+        );
+        assert!(session.graph_cache.is_empty());
+        assert!(session.read_model_cache.is_empty());
+
+        let repeated = session
+            .passage_references_page(
+                "story-1",
+                "b",
+                CorePassageReferencesQuery {
+                    cursor: None,
+                    limit: 2,
+                },
+            )
+            .expect("repeated first page");
+        assert_eq!(repeated.references, first.references);
+        assert_eq!(repeated.next_cursor, first.next_cursor);
+
+        let second = session
+            .passage_references_page(
+                "story-1",
+                "b",
+                CorePassageReferencesQuery {
+                    cursor: first.next_cursor.clone(),
+                    limit: 2,
+                },
+            )
+            .expect("second page");
+        assert_eq!(second.references.len(), 2);
+        assert_eq!(session.backlink_scan_count, 1);
+
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                story_id: "story-1".into(),
+                passage_id: "a".into(),
+                text: "[[Next]]".into(),
+            })
+            .expect("mutation");
+        assert_eq!(
+            session.passage_references_page(
+                "story-1",
+                "b",
+                CorePassageReferencesQuery {
+                    cursor: first.next_cursor,
+                    limit: 2
+                },
+            ),
+            Err(CoreError::StaleReadModelCursor)
+        );
+    }
+
+    #[test]
+    fn passage_references_do_not_guess_between_duplicate_names() {
+        let mut session = session();
+        let story = session
+            .project
+            .stories
+            .iter_mut()
+            .find(|story| story.id.as_ref() == "story-1")
+            .expect("story");
+        story
+            .passage_by_id_mut(&PassageId::new("b"))
+            .expect("next")
+            .text = "[[Next]] [[Next]]".into();
+        story.passages.push(passage("duplicate", "Next", "", 800.0));
+
+        let references = session
+            .passage_references_page("story-1", "b", CorePassageReferencesQuery::default())
+            .expect("references");
+        assert_eq!(
+            references.coverage,
+            CorePassageReferenceCoverage::AmbiguousPassageName
+        );
+        assert_eq!(references.total_count, 0);
+        assert!(references.references.is_empty());
+        let duplicate_references = session
+            .passage_references_page(
+                "story-1",
+                "duplicate",
+                CorePassageReferencesQuery::default(),
+            )
+            .expect("duplicate references");
+        assert_eq!(
+            duplicate_references.coverage,
+            CorePassageReferenceCoverage::AmbiguousPassageName
+        );
+        assert!(duplicate_references.references.is_empty());
+
+        let ambiguous = session
+            .definition(CoreDefinitionQuery {
+                expected_revision: session.revision() as u32,
+                story_id: "story-1".into(),
+                symbol_kind: CoreDefinitionSymbolKind::Passage,
+                name: "Next".into(),
+            })
+            .expect("definition");
+        assert!(
+            matches!(ambiguous, CoreDefinitionResult::Ambiguous { ref locations, total_count: 2 } if locations.len() == 2 && locations[0].passage_id == "b")
+        );
+        assert!(matches!(
+            session
+                .definition(CoreDefinitionQuery {
+                    expected_revision: session.revision() as u32,
+                    story_id: "story-1".into(),
+                    symbol_kind: CoreDefinitionSymbolKind::Passage,
+                    name: "Missing".into(),
+                })
+                .expect("not found"),
+            CoreDefinitionResult::NotFound
+        ));
+        assert_eq!(
+            session
+                .definition(CoreDefinitionQuery {
+                    expected_revision: session.revision() as u32,
+                    story_id: "story-1".into(),
+                    symbol_kind: CoreDefinitionSymbolKind::Variable,
+                    name: "$score".into()
+                })
+                .expect("unsupported"),
+            CoreDefinitionResult::Unsupported {
+                symbol_kind: CoreDefinitionSymbolKind::Variable
+            }
+        );
+        assert_eq!(
+            session
+                .definition(CoreDefinitionQuery {
+                    expected_revision: u32::MAX,
+                    story_id: "story-1".into(),
+                    symbol_kind: CoreDefinitionSymbolKind::Passage,
+                    name: "Missing".into()
+                })
+                .expect("stale"),
+            CoreDefinitionResult::Stale
+        );
+    }
+
+    #[test]
+    fn passage_references_reject_oversized_results_without_poisoning_the_session() {
+        let mut session = session();
+        let occurrence_count =
+            MAX_BACKLINK_CACHE_BYTES / std::mem::size_of::<BacklinkOccurrence>() + 1;
+        let source = session
+            .project
+            .stories
+            .iter_mut()
+            .find(|story| story.id.as_ref() == "story-1")
+            .expect("story")
+            .passage_by_id_mut(&PassageId::new("a"))
+            .expect("source");
+        source.text = "[[Next]]".repeat(occurrence_count);
+
+        assert_eq!(
+            session.passage_references_page("story-1", "b", CorePassageReferencesQuery::default(),),
+            Err(CoreError::PassageReferencesTooLarge("b".into()))
+        );
+        assert_eq!(
+            session
+                .backlinks_page("story-1", "b", CoreBacklinksQuery::default())
+                .expect("ordinary backlinks remain available")
+                .total_count,
+            1
+        );
+
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                story_id: "story-1".into(),
+                passage_id: "a".into(),
+                text: "[[Next]]".into(),
+            })
+            .expect("shrink source");
+        let recovered = session
+            .passage_references_page("story-1", "b", CorePassageReferencesQuery::default())
+            .expect("references recover after the source shrinks");
+        assert_eq!(recovered.total_count, 1);
+    }
+
+    #[test]
+    fn ambiguous_definitions_bound_locations_and_report_the_full_count() {
+        let mut session = session();
+        let story = session
+            .project
+            .stories
+            .iter_mut()
+            .find(|story| story.id.as_ref() == "story-1")
+            .expect("story");
+        for index in 0..MAX_DEFINITION_AMBIGUOUS_LOCATIONS + 10 {
+            story.passages.push(passage(
+                &format!("duplicate-{index}"),
+                "Next",
+                "",
+                800.0 + index as f64,
+            ));
+        }
+
+        let result = session
+            .definition(CoreDefinitionQuery {
+                expected_revision: session.revision() as u32,
+                story_id: "story-1".into(),
+                symbol_kind: CoreDefinitionSymbolKind::Passage,
+                name: "Next".into(),
+            })
+            .expect("definition");
+        assert!(matches!(
+            result,
+            CoreDefinitionResult::Ambiguous {
+                ref locations,
+                total_count
+            } if locations.len() == MAX_DEFINITION_AMBIGUOUS_LOCATIONS
+                && total_count == MAX_DEFINITION_AMBIGUOUS_LOCATIONS + 11
+        ));
     }
 
     #[test]

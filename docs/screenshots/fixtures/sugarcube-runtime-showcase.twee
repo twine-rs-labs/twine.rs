@@ -1,0 +1,319 @@
+:: StoryTitle
+Night Signal: SugarCube Runtime Lab
+
+:: StoryData
+{
+  "ifid": "B0E61CD4-64A9-49B2-A770-36F500A20EE1",
+  "format": "SugarCube",
+  "format-version": "2.36.1",
+  "start": "Signal Deck",
+  "tag-colors": {
+    "opening": "blue",
+    "relay": "purple",
+    "contact": "orange"
+  },
+  "zoom": 1
+}
+
+:: StoryStylesheet [stylesheet]
+html,
+body {
+  background: #070913;
+  color: #f5f7ff;
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow-x: hidden;
+}
+
+#ui-bar {
+  display: none;
+}
+
+#story,
+#passages {
+  margin: 0;
+  max-width: none;
+  padding: 0;
+  width: 100%;
+}
+
+.passage {
+  margin: 0;
+  max-width: none;
+  min-height: 100vh;
+  padding: 0;
+  width: 100%;
+}
+
+.signal-scene {
+  background:
+    radial-gradient(circle at 74% 42%, rgba(105, 81, 255, .2), transparent 25rem),
+    linear-gradient(118deg, #090b1a 0%, #10142b 48%, #080914 100%);
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: minmax(25rem, 1.05fr) minmax(22rem, .95fr);
+  min-height: 100vh;
+  overflow: hidden;
+  padding: 4.5rem 7vw;
+  position: relative;
+}
+
+.signal-scene::before {
+  background-image: radial-gradient(circle, rgba(214, 221, 255, .46) 0 1px, transparent 1.5px);
+  background-size: 53px 47px;
+  content: "";
+  inset: 0;
+  mask-image: linear-gradient(90deg, transparent 8%, black 62%, transparent 100%);
+  opacity: .34;
+  position: absolute;
+}
+
+.signal-copy {
+  align-self: center;
+  max-width: 43rem;
+  position: relative;
+  z-index: 2;
+}
+
+.signal-kicker,
+.signal-location,
+.signal-readouts {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-transform: uppercase;
+}
+
+.signal-kicker {
+  color: #ffcb74;
+  font-size: .72rem;
+  letter-spacing: .24em;
+  margin-bottom: 1.1rem;
+}
+
+.signal-location {
+  color: #9ba9ff;
+  font-size: .8rem;
+  letter-spacing: .16em;
+  margin-bottom: 1.2rem;
+}
+
+.signal-copy h1 {
+  color: #f4f5ff;
+  font: 650 clamp(3rem, 5.1vw, 5.7rem)/.92 ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: -.065em;
+  margin: 0 0 1.25rem;
+  max-width: 42rem;
+}
+
+.signal-copy p {
+  color: #c8cee9;
+  font: 1.08rem/1.7 ui-sans-serif, system-ui, sans-serif;
+  margin: 0;
+  max-width: 37rem;
+}
+
+.signal-readouts {
+  border-left: 2px solid #806cff;
+  color: #949dbc;
+  display: grid;
+  font-size: .68rem;
+  gap: .55rem;
+  letter-spacing: .09em;
+  margin: 1.6rem 0;
+  padding: .2rem 0 .2rem 1rem;
+}
+
+.signal-readouts strong {
+  color: #ffce7a;
+  font-weight: 650;
+}
+
+.signal-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .8rem;
+  margin-top: 1.4rem;
+}
+
+.signal-links a,
+.signal-links a:visited {
+  background: #6951df;
+  border: 1px solid rgba(211, 205, 255, .28);
+  border-radius: 999px;
+  color: #fff;
+  font: 650 .92rem/1 ui-sans-serif, system-ui, sans-serif;
+  padding: .8rem 1.1rem;
+  text-decoration: none;
+}
+
+.signal-links a:hover {
+  background: #806cff;
+}
+
+.signal-orbit {
+  align-self: center;
+  aspect-ratio: 1;
+  justify-self: end;
+  max-width: 37rem;
+  position: relative;
+  width: 100%;
+  z-index: 1;
+}
+
+.signal-orbit__ring,
+.signal-orbit__core,
+.signal-orbit__sweep {
+  border-radius: 50%;
+  position: absolute;
+}
+
+.signal-orbit__ring {
+  border: 1px solid rgba(159, 173, 255, .26);
+  inset: 8%;
+}
+
+.signal-orbit__ring--inner {
+  border-color: rgba(255, 202, 112, .34);
+  inset: 25%;
+}
+
+.signal-orbit__core {
+  background:
+    radial-gradient(circle at 38% 35%, #fff1c8 0 3%, #ffb84f 8%, #744be8 29%, #11152d 69%);
+  box-shadow: 0 0 6rem rgba(116, 75, 232, .52);
+  inset: 36%;
+}
+
+.signal-orbit__sweep {
+  background: conic-gradient(from 218deg, transparent 0 74%, rgba(151, 166, 255, .27) 88%, transparent 100%);
+  inset: 13%;
+}
+
+.signal-orbit__label {
+  background: rgba(7, 9, 20, .74);
+  border: 1px solid rgba(160, 173, 255, .23);
+  bottom: 13%;
+  color: #afb9ff;
+  font: .66rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: .13em;
+  padding: .55rem .7rem;
+  position: absolute;
+  right: 0;
+  text-transform: uppercase;
+}
+
+.signal-scene--relay {
+  background:
+    radial-gradient(circle at 72% 38%, rgba(255, 156, 69, .2), transparent 25rem),
+    linear-gradient(118deg, #100b13 0%, #251325 50%, #0c0a14 100%);
+}
+
+.signal-scene--relay .signal-orbit__core {
+  background: radial-gradient(circle at 38% 35%, #fff5d3 0 4%, #ff9c45 12%, #8d355f 35%, #18101d 70%);
+  box-shadow: 0 0 6rem rgba(255, 128, 69, .38);
+}
+
+.signal-scene--contact {
+  background:
+    radial-gradient(circle at 72% 38%, rgba(57, 222, 190, .2), transparent 25rem),
+    linear-gradient(118deg, #071013 0%, #09252a 50%, #060c13 100%);
+}
+
+.signal-scene--contact .signal-orbit__core {
+  background: radial-gradient(circle at 38% 35%, #ebfff9 0 4%, #39debe 12%, #28758c 35%, #07151b 70%);
+  box-shadow: 0 0 6rem rgba(57, 222, 190, .38);
+}
+
+:: StoryInit
+<<set $signalStrength = 37>>
+<<set $contactStatus = "unverified">>
+<<set $dishLocked = false>>
+<<set $contactLog = []>>
+
+:: Signal Deck [opening nobr]
+<<set _scanWindow = "03:17–03:29">>
+<<set $contactLog.push("Signal Deck")>>
+<<run console.info("Night Signal passage: Signal Deck")>>
+<div class="signal-scene signal-scene--deck">
+  <section class="signal-copy">
+    <div class="signal-kicker">Night Signal · SugarCube Runtime Lab</div>
+    <div class="signal-location">Relay Array 06 · Periapsis</div>
+    <h1>Something answered the listening array.</h1>
+    <p>A narrow-band pulse repeats beyond the moon, too regular for weather and too patient for noise. The dish is still drifting toward its source.</p>
+    <div class="signal-readouts">
+      <span>signal <strong>37%</strong></span>
+      <span>contact <strong>unverified</strong></span>
+      <span>scan window <strong>12 minutes</strong></span>
+    </div>
+    <div class="signal-links">[[Lock the relay dish->Relay Lock]]</div>
+  </section>
+  <div class="signal-orbit" aria-hidden="true">
+    <div class="signal-orbit__ring"></div>
+    <div class="signal-orbit__ring signal-orbit__ring--inner"></div>
+    <div class="signal-orbit__sweep"></div>
+    <div class="signal-orbit__core"></div>
+    <div class="signal-orbit__label">candidate source · 18h 42m 09s</div>
+  </div>
+</div>
+
+:: Relay Lock [relay nobr]
+<<set _phaseOffset = "+0.0042">>
+<<set $dishLocked = true>>
+<<set $signalStrength = 82>>
+<<set $contactStatus = "structured">>
+<<set $contactLog.push("Relay Lock")>>
+<<run console.info("Night Signal passage: Relay Lock")>>
+<div class="signal-scene signal-scene--relay">
+  <section class="signal-copy">
+    <div class="signal-kicker">Night Signal · SugarCube Runtime Lab</div>
+    <div class="signal-location">Relay Lock · Phase +0.0042</div>
+    <h1>The noise resolves into a map.</h1>
+    <p>Three tones sketch an orbit around an invisible body. Between them, a fourth signal carries the cadence of a question.</p>
+    <div class="signal-readouts">
+      <span>signal <strong>82%</strong></span>
+      <span>dish <strong>locked</strong></span>
+      <span>contact <strong>structured</strong></span>
+    </div>
+    <div class="signal-links">
+      [[Answer the signal->First Contact]]
+      [[Release the dish->Signal Deck]]
+    </div>
+  </section>
+  <div class="signal-orbit" aria-hidden="true">
+    <div class="signal-orbit__ring"></div>
+    <div class="signal-orbit__ring signal-orbit__ring--inner"></div>
+    <div class="signal-orbit__sweep"></div>
+    <div class="signal-orbit__core"></div>
+    <div class="signal-orbit__label">phase lock · stable</div>
+  </div>
+</div>
+
+:: First Contact [contact nobr]
+<<set _replyLength = 13>>
+<<set $signalStrength = 100>>
+<<set $contactStatus = "acknowledged">>
+<<set $contactLog.push("First Contact")>>
+<<run console.info("Night Signal passage: First Contact")>>
+<div class="signal-scene signal-scene--contact">
+  <section class="signal-copy">
+    <div class="signal-kicker">Night Signal · SugarCube Runtime Lab</div>
+    <div class="signal-location">First Contact · Packet 001</div>
+    <h1>The reply contains thirteen stars.</h1>
+    <p>They arrive as coordinates, then brighten into a route home. The final point is the listening array itself—marked long before it was built.</p>
+    <div class="signal-readouts">
+      <span>signal <strong>100%</strong></span>
+      <span>contact <strong>acknowledged</strong></span>
+      <span>reply <strong>13 coordinates</strong></span>
+    </div>
+    <div class="signal-links">[[Begin another scan->Signal Deck]]</div>
+  </section>
+  <div class="signal-orbit" aria-hidden="true">
+    <div class="signal-orbit__ring"></div>
+    <div class="signal-orbit__ring signal-orbit__ring--inner"></div>
+    <div class="signal-orbit__sweep"></div>
+    <div class="signal-orbit__core"></div>
+    <div class="signal-orbit__label">reply decoded · 13 points</div>
+  </div>
+</div>

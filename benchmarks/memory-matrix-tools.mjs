@@ -16,7 +16,7 @@ export function selectLatestMemoryMatrixReports(
 			report.smoke ||
 			report.test?.status !== 'passed' ||
 			report.evaluation?.passed !== true ||
-			report.environment?.metricContracts?.memoryAttribution !== 1 ||
+			report.environment?.metricContracts?.memoryAttribution !== 2 ||
 			!matrixSizes.includes(report.fixture?.passageCount) ||
 			typeof git?.revision !== 'string' ||
 			typeof git?.dirty !== 'boolean' ||
@@ -180,7 +180,7 @@ export function createMemoryMatrix(
 				'Memory matrix requires passing, non-smoke startup reports.'
 			);
 		}
-		if (report.environment?.metricContracts?.memoryAttribution !== 1) {
+		if (report.environment?.metricContracts?.memoryAttribution !== 2) {
 			throw new Error('Memory matrix requires memory attribution contract 1.');
 		}
 		if ((report.aggregates?.[primaryMetric]?.count ?? 0) < 3) {
@@ -272,8 +272,8 @@ export function createMemoryMatrix(
 				revision: [...revisions][0]
 			},
 			metricContracts: {
-				memory: 3,
-				memoryAttribution: 1,
+				memory: 4,
+				memoryAttribution: 2,
 				...(footprintAttributionAvailable ? {memoryFootprint: 1} : {})
 			}
 		},

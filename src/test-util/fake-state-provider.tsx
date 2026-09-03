@@ -5,7 +5,7 @@ import {
 	CoreProjectHost,
 	CoreProjectHostContext,
 	CoreProjectHostProvider
-} from '../core/project-host';
+} from '../core/project-host-public';
 import {DialogsContextProvider} from '../dialogs';
 import {PrefsContext, PrefsState} from '../store/prefs';
 import {reducer as prefsReducer} from '../store/prefs/reducer';

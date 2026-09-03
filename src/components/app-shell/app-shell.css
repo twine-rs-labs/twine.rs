@@ -607,6 +607,11 @@
 	font-size: var(--fs-micro);
 }
 
+.app-cp__reason {
+	color: var(--text-muted);
+	font-size: var(--fs-micro);
+}
+
 .app-cp__empty {
 	align-items: center;
 	color: var(--text-muted);

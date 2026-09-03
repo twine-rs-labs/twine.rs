@@ -1,4 +1,5 @@
 import {
+	act,
 	fireEvent,
 	render,
 	screen,
@@ -6,27 +7,54 @@ import {
 	within
 } from '@testing-library/react';
 import * as React from 'react';
-import {MemoryRouter} from 'react-router';
+import {MemoryRouter, useNavigate} from 'react-router';
+import {AppShellContext} from '../../../components/app-shell/app-shell-context';
+import type {AppCommandContribution} from '../../../components/app-shell/command-registry';
 import {
 	CoreProjectHostProvider,
+	ProjectScopedCoreProjectHost,
 	StoreCoreProjectHost
-} from '../../../core/project-host';
-import {markProjectStoryHydration} from '../../../store/project-hydration';
+} from '../../../test-util/core-project-host-runtime';
+import {
+	markProjectStoryHydration,
+	projectStoryHydration
+} from '../../../store/project-hydration';
 import {saveProjectMetadata} from '../../../store/project-metadata';
 import {StoriesContext} from '../../../store/stories';
-import {fakePassage, fakeStory, waitForMockPromises} from '../../../test-util';
+import {
+	fakePassage,
+	fakeStory,
+	LocationInspector,
+	waitForMockPromises
+} from '../../../test-util';
+import {workbenchBufferCoordinator} from '../../../util/workbench-buffer-coordinator';
 import {StoryWorkspaceShell} from '../story-workspace-shell';
 import {StoryEditMode} from '../workspace-state';
 
 jest.mock('../editor-dock', () => ({
 	EditorDock: ({
 		onClose,
+		onLocalBufferChange,
+		onRevealApplied,
+		revealRequests,
 		windows
 	}: {
 		onClose?: (spec: any) => void;
+		onLocalBufferChange?: () => void;
+		onRevealApplied?: (
+			editorId: string,
+			requestKey: number,
+			restoreToken?: string
+		) => void;
+		revealRequests?: Map<string, {key: number; restoreToken?: string}>;
 		windows: any[];
 	}) => (
 		<div data-testid="editor-dock">
+			{onLocalBufferChange && (
+				<button onClick={onLocalBufferChange}>
+					simulate-local-buffer-change
+				</button>
+			)}
 			{windows.map(spec => {
 				const id =
 					spec.kind === 'passage' ? `passage:${spec.passageId}` : spec.kind;
@@ -43,12 +71,32 @@ jest.mock('../editor-dock', () => ({
 						{onClose && (
 							<button onClick={() => onClose(spec)}>close-{id}</button>
 						)}
+						{onRevealApplied && revealRequests?.get(id) && (
+							<button
+								onClick={() => {
+									const request = revealRequests.get(id)!;
+									onRevealApplied(id, request.key, request.restoreToken);
+								}}
+							>
+								ack-{id}-{revealRequests.get(id)!.key}
+							</button>
+						)}
 					</div>
 				);
 			})}
 		</div>
 	)
 }));
+
+const TestRouteNavigation: React.FC = () => {
+	const navigate = useNavigate();
+
+	return (
+		<button onClick={() => navigate('/superseded?mode=text')}>
+			navigate-test-route
+		</button>
+	);
+};
 
 function storyWithLinkedPassages() {
 	const story = fakeStory(0);
@@ -82,10 +130,27 @@ async function renderComponent(
 			story: ReturnType<typeof storyWithLinkedPassages>['story']
 		) => void;
 		deferWorkspaceQueries?: boolean;
+		commandRegistration?: (contribution: AppCommandContribution) => void;
 		onOpenFindReplace?: jest.Mock;
+		strictMode?: boolean;
 		storyDispatch?: jest.Mock;
 	}
 ) {
+	const {revealRequests: initialRevealRequests, ...shellProps} = props ?? {};
+	let replaceRevealRequests:
+		| ((
+				next: Map<
+					string,
+					{
+						end?: number;
+						focus?: 'editor' | 'preserve';
+						key: number;
+						position?: number;
+						restoreToken?: string;
+					}
+				>
+		  ) => void)
+		| undefined;
 	const queryBacklinks = jest.spyOn(
 		StoreCoreProjectHost.prototype,
 		'queryBacklinksPageAsync'
@@ -110,40 +175,75 @@ async function renderComponent(
 	const onOpenEditorWindow = jest.fn();
 	const onOpenFindReplace = context?.onOpenFindReplace ?? jest.fn();
 	const storyDispatch = context?.storyDispatch ?? jest.fn();
+	const appShellContext = {
+		inShell: true,
+		registerCommandContribution: (contribution: AppCommandContribution) => {
+			context?.commandRegistration?.(contribution);
+			return {
+				refresh: (commands: AppCommandContribution['commands']) =>
+					context?.commandRegistration?.({...contribution, commands}),
+				unregister: () => undefined
+			};
+		},
+		setDock: () => undefined,
+		setToolbar: () => undefined
+	};
 
 	context?.configureStory?.(story);
 
-	render(
+	const WorkspaceHarness: React.FC = () => {
+		const [revealRequests, setRevealRequests] = React.useState(
+			() => initialRevealRequests ?? new Map()
+		);
+		replaceRevealRequests = next => setRevealRequests(new Map(next));
+
+		return (
+			<StoryWorkspaceShell
+				bottomDrawerOpen={false}
+				editorDockLayout="tile"
+				graphPanel={<div data-testid="graph-panel" />}
+				leftDockCollapsed={false}
+				mode={mode}
+				onChangeBottomDrawerOpen={jest.fn()}
+				onChangeEditorDockLayout={jest.fn()}
+				onChangeLeftDockCollapsed={jest.fn()}
+				onChangeRightDockCollapsed={jest.fn()}
+				onOpenEditorWindow={onOpenEditorWindow}
+				onOpenFindReplace={onOpenFindReplace}
+				onRevealPassageInGraph={onRevealPassageInGraph}
+				onSelectPassage={onSelectPassage}
+				revealRequests={revealRequests}
+				rightDockCollapsed={false}
+				selectedPassageId={start.id}
+				story={story}
+				{...shellProps}
+			/>
+		);
+	};
+	const createTree = () => (
 		<MemoryRouter>
-			<StoriesContext.Provider
-				value={{
-					dispatch: storyDispatch,
-					stories: [story]
-				}}
-			>
-				<CoreProjectHostProvider>
-					<StoryWorkspaceShell
-						bottomDrawerOpen={false}
-						editorDockLayout="tile"
-						graphPanel={<div data-testid="graph-panel" />}
-						leftDockCollapsed={false}
-						mode={mode}
-						onChangeBottomDrawerOpen={jest.fn()}
-						onChangeEditorDockLayout={jest.fn()}
-						onChangeLeftDockCollapsed={jest.fn()}
-						onChangeRightDockCollapsed={jest.fn()}
-						onOpenEditorWindow={onOpenEditorWindow}
-						onOpenFindReplace={onOpenFindReplace}
-						onRevealPassageInGraph={onRevealPassageInGraph}
-						onSelectPassage={onSelectPassage}
-						rightDockCollapsed={false}
-						selectedPassageId={start.id}
-						story={story}
-						{...props}
-					/>
-				</CoreProjectHostProvider>
-			</StoriesContext.Provider>
+			<AppShellContext.Provider value={appShellContext}>
+				<StoriesContext.Provider
+					value={{
+						dispatch: storyDispatch,
+						stories: [story]
+					}}
+				>
+					<CoreProjectHostProvider>
+						<WorkspaceHarness />
+					</CoreProjectHostProvider>
+				</StoriesContext.Provider>
+			</AppShellContext.Provider>
+			<TestRouteNavigation />
+			<LocationInspector />
 		</MemoryRouter>
+	);
+	const rendered = render(
+		context?.strictMode ? (
+			<React.StrictMode>{createTree()}</React.StrictMode>
+		) : (
+			createTree()
+		)
 	);
 
 	const waitForQueries = async () => {
@@ -164,6 +264,10 @@ async function renderComponent(
 		start,
 		story,
 		storyDispatch,
+		unmount: rendered.unmount,
+		replaceRevealRequests: (
+			next: Parameters<NonNullable<typeof replaceRevealRequests>>[0]
+		) => act(() => replaceRevealRequests?.(next)),
 		waitForQueries
 	};
 }
@@ -308,6 +412,431 @@ describe('<StoryWorkspaceShell>', () => {
 		expect(screen.getAllByText('Missing').length).toBeGreaterThan(0);
 	});
 
+	it('finds standard passage-link references and reveals the exact source passage', async () => {
+		const {next, onOpenEditorWindow, onSelectPassage, start} =
+			await renderComponent('text', {selectedPassageId: 'next'});
+
+		fireEvent.click(
+			screen.getByRole('button', {
+				name: 'routes.storyEdit.workspace.findReferences'
+			})
+		);
+		expect(
+			await screen.findByRole('dialog', {
+				name: 'components.passageReferences.title'
+			})
+		).toBeInTheDocument();
+		expect(
+			await screen.findByRole('heading', {name: start.name})
+		).toBeVisible();
+
+		fireEvent.click(
+			screen.getByRole('button', {
+				name: 'components.passageReferences.revealInSource'
+			})
+		);
+		await waitFor(() => expect(onSelectPassage).toHaveBeenCalledWith(start));
+		expect(onOpenEditorWindow).toHaveBeenCalledWith({
+			kind: 'passage',
+			passageId: start.id
+		});
+		expect(
+			screen.queryByRole('dialog', {
+				name: 'components.passageReferences.title'
+			})
+		).not.toBeInTheDocument();
+		expect(next.name).toBe('Next');
+	});
+
+	it('restores command focus only after one exact source reveal acknowledgement', async () => {
+		const requests = new Map<
+			string,
+			{
+				end?: number;
+				focus?: 'editor' | 'preserve';
+				key: number;
+				position?: number;
+				restoreToken?: string;
+			}
+		>();
+		const restoreFocus = jest.fn();
+		let findReferences: AppCommandContribution['commands'][number] | undefined;
+		const {replaceRevealRequests, start} = await renderComponent(
+			'text',
+			{
+				editorWindows: [{kind: 'passage', passageId: 'start'}],
+				revealRequests: requests,
+				selectedPassageId: 'next'
+			},
+			{
+				commandRegistration: contribution => {
+					findReferences = contribution.commands.find(
+						command => command.id === 'story-edit.find-references'
+					);
+				}
+			}
+		);
+
+		await waitFor(() => expect(findReferences).toBeDefined());
+		act(() => findReferences?.run({restoreFocus}));
+		fireEvent.click(
+			await screen.findByRole('button', {
+				name: 'components.passageReferences.revealInSource'
+			})
+		);
+
+		await waitFor(() =>
+			expect(
+				screen.queryByRole('dialog', {
+					name: 'components.passageReferences.title'
+				})
+			).not.toBeInTheDocument()
+		);
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-search',
+				expect.stringContaining('restoreToken=')
+			)
+		);
+		expect(restoreFocus).not.toHaveBeenCalled();
+
+		const url = new URL(
+			`https://example.invalid${screen.getByTestId('location').getAttribute('data-pathname')}${screen.getByTestId('location').getAttribute('data-search')}`
+		);
+		const editorId = `passage:${start.id}`;
+		const position = Number(url.searchParams.get('offset'));
+		const end = Number(url.searchParams.get('end'));
+		const token = url.searchParams.get('restoreToken')!;
+
+		replaceRevealRequests(
+			new Map([
+				[
+					editorId,
+					{
+						end,
+						focus: 'preserve',
+						key: 1,
+						position,
+						restoreToken: 'stale-token'
+					}
+				]
+			])
+		);
+		fireEvent.click(
+			await screen.findByRole('button', {name: `ack-${editorId}-1`})
+		);
+		expect(restoreFocus).not.toHaveBeenCalled();
+
+		replaceRevealRequests(
+			new Map([
+				[
+					editorId,
+					{
+						end,
+						focus: 'preserve',
+						key: 2,
+						position,
+						restoreToken: token
+					}
+				]
+			])
+		);
+		fireEvent.click(
+			await screen.findByRole('button', {name: `ack-${editorId}-2`})
+		);
+		expect(restoreFocus).toHaveBeenCalledTimes(1);
+
+		replaceRevealRequests(
+			new Map([
+				[
+					editorId,
+					{
+						end,
+						focus: 'preserve',
+						key: 3,
+						position,
+						restoreToken: token
+					}
+				]
+			])
+		);
+		fireEvent.click(
+			await screen.findByRole('button', {name: `ack-${editorId}-3`})
+		);
+		expect(restoreFocus).toHaveBeenCalledTimes(1);
+	});
+
+	it('releases pending command focus restoration when navigation supersedes the reveal', async () => {
+		const requests = new Map<
+			string,
+			{
+				end?: number;
+				focus?: 'editor' | 'preserve';
+				key: number;
+				position?: number;
+				restoreToken?: string;
+			}
+		>();
+		const restoreFocus = jest.fn();
+		let findReferences: AppCommandContribution['commands'][number] | undefined;
+		const {replaceRevealRequests, start} = await renderComponent(
+			'text',
+			{
+				editorWindows: [{kind: 'passage', passageId: 'start'}],
+				revealRequests: requests,
+				selectedPassageId: 'next'
+			},
+			{
+				commandRegistration: contribution => {
+					findReferences = contribution.commands.find(
+						command => command.id === 'story-edit.find-references'
+					);
+				}
+			}
+		);
+
+		await waitFor(() => expect(findReferences).toBeDefined());
+		act(() => findReferences?.run({restoreFocus}));
+		fireEvent.click(
+			await screen.findByRole('button', {
+				name: 'components.passageReferences.revealInSource'
+			})
+		);
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-search',
+				expect.stringContaining('restoreToken=')
+			)
+		);
+		expect(restoreFocus).not.toHaveBeenCalled();
+
+		const url = new URL(
+			`https://example.invalid${screen.getByTestId('location').getAttribute('data-pathname')}${screen.getByTestId('location').getAttribute('data-search')}`
+		);
+		const editorId = `passage:${start.id}`;
+		const token = url.searchParams.get('restoreToken')!;
+		fireEvent.click(screen.getByRole('button', {name: 'navigate-test-route'}));
+		await waitFor(() => expect(restoreFocus).toHaveBeenCalledTimes(1));
+
+		replaceRevealRequests(
+			new Map([
+				[
+					editorId,
+					{
+						end: Number(url.searchParams.get('end')),
+						focus: 'preserve',
+						key: 1,
+						position: Number(url.searchParams.get('offset')),
+						restoreToken: token
+					}
+				]
+			])
+		);
+		fireEvent.click(
+			await screen.findByRole('button', {name: `ack-${editorId}-1`})
+		);
+		expect(restoreFocus).toHaveBeenCalledTimes(1);
+	});
+
+	it('invalidates visible references as soon as a local editor changes', async () => {
+		await renderComponent('text', {selectedPassageId: 'next'});
+
+		fireEvent.click(
+			screen.getByRole('button', {
+				name: 'routes.storyEdit.workspace.findReferences'
+			})
+		);
+		expect(
+			await screen.findByRole('dialog', {
+				name: 'components.passageReferences.title'
+			})
+		).toBeInTheDocument();
+
+		fireEvent.click(
+			screen.getByRole('button', {name: 'simulate-local-buffer-change'})
+		);
+		expect(
+			screen.queryByRole('dialog', {
+				name: 'components.passageReferences.title'
+			})
+		).not.toBeInTheDocument();
+	});
+
+	it('does not reveal a reference while an editor is composing', async () => {
+		const {onSelectPassage, story} = await renderComponent('text', {
+			selectedPassageId: 'next'
+		});
+		fireEvent.click(
+			screen.getByRole('button', {
+				name: 'routes.storyEdit.workspace.findReferences'
+			})
+		);
+		expect(
+			await screen.findByRole('button', {
+				name: 'components.passageReferences.revealInSource'
+			})
+		).toBeInTheDocument();
+		const unregister = workbenchBufferCoordinator.register({
+			bufferId: 'composing-reveal-source',
+			flush: jest.fn(),
+			hasPendingChanges: () => true,
+			isComposing: () => true,
+			revision: () => 1,
+			storyId: story.id
+		});
+
+		try {
+			fireEvent.click(
+				screen.getByRole('button', {
+					name: 'components.passageReferences.revealInSource'
+				})
+			);
+			expect(
+				await screen.findByText('components.passageReferences.revealFailed')
+			).toBeInTheDocument();
+			expect(onSelectPassage).not.toHaveBeenCalled();
+		} finally {
+			unregister();
+		}
+	});
+
+	it('restores command focus once when a reference reveal fails before navigation', async () => {
+		const restoreFocus = jest.fn();
+		let findReferences: AppCommandContribution['commands'][number] | undefined;
+		const {story} = await renderComponent(
+			'text',
+			{selectedPassageId: 'next'},
+			{
+				commandRegistration: contribution => {
+					findReferences = contribution.commands.find(
+						command => command.id === 'story-edit.find-references'
+					);
+				}
+			}
+		);
+
+		await waitFor(() => expect(findReferences).toBeDefined());
+		act(() => findReferences?.run({restoreFocus}));
+		await screen.findByRole('button', {
+			name: 'components.passageReferences.revealInSource'
+		});
+		const unregister = workbenchBufferCoordinator.register({
+			bufferId: 'command-focus-failed-reveal',
+			flush: jest.fn(),
+			hasPendingChanges: () => true,
+			isComposing: () => true,
+			revision: () => 1,
+			storyId: story.id
+		});
+
+		try {
+			fireEvent.click(
+				screen.getByRole('button', {
+					name: 'components.passageReferences.revealInSource'
+				})
+			);
+			await screen.findByText('components.passageReferences.revealFailed');
+			expect(restoreFocus).toHaveBeenCalledTimes(1);
+		} finally {
+			unregister();
+		}
+	});
+
+	it('goes to a passage definition only when the exact name is unique', async () => {
+		const {next, onSelectPassage} = await renderComponent('text');
+
+		fireEvent.click(
+			screen.getByRole('button', {
+				name: /Next.*routes\.storyEdit\.workspace\.goToDefinition/
+			})
+		);
+		await waitFor(() => expect(onSelectPassage).toHaveBeenCalledWith(next));
+	});
+
+	it('reports ambiguous definitions without selecting a passage', async () => {
+		const {onSelectPassage} = await renderComponent('text', undefined, {
+			configureStory: story => {
+				story.passages.push(
+					fakePassage({
+						id: 'next-duplicate',
+						name: 'Next',
+						story: story.id,
+						text: ''
+					})
+				);
+			}
+		});
+
+		fireEvent.click(
+			screen.getByRole('button', {
+				name: /Next.*routes\.storyEdit\.workspace\.goToDefinition/
+			})
+		);
+		expect(
+			await screen.findByText('routes.storyEdit.workspace.definitionAmbiguous')
+		).toBeInTheDocument();
+		expect(onSelectPassage).not.toHaveBeenCalled();
+	});
+
+	it('drops a late definition result after the workspace unmounts', async () => {
+		let resolveDefinition!: (value: {
+			location: {
+				passageId: string;
+				passageName: string;
+				provenance: {
+					capabilityRevision: number;
+					formatName: null;
+					formatVersion: null;
+					providerIdentifier: string;
+				};
+				resultKey: string;
+				revision: number;
+				span: {encoding: 'utf16-code-units'; end: number; start: number};
+				storyId: string;
+			};
+			type: 'unique';
+		}) => void;
+		const queryDefinition = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'queryDefinitionAsync')
+			.mockImplementation(
+				() =>
+					new Promise(resolve => {
+						resolveDefinition = resolve;
+					})
+			);
+		const {next, onSelectPassage, story, unmount} =
+			await renderComponent('text');
+
+		fireEvent.click(
+			screen.getByRole('button', {
+				name: /Next.*routes\.storyEdit\.workspace\.goToDefinition/
+			})
+		);
+		await waitFor(() => expect(queryDefinition).toHaveBeenCalledTimes(1));
+		unmount();
+		await act(async () => {
+			resolveDefinition({
+				location: {
+					passageId: next.id,
+					passageName: next.name,
+					provenance: {
+						capabilityRevision: 1,
+						formatName: null,
+						formatVersion: null,
+						providerIdentifier: 'twine-core.passage-index'
+					},
+					resultKey: 'late-definition',
+					revision: 1,
+					span: {encoding: 'utf16-code-units', end: 0, start: 0},
+					storyId: story.id
+				},
+				type: 'unique'
+			});
+		});
+
+		expect(onSelectPassage).not.toHaveBeenCalled();
+	});
+
 	it('renders named workbench drawer panels with the bound session context', async () => {
 		const onChangeBottomDrawerPanel = jest.fn();
 
@@ -429,6 +958,205 @@ describe('<StoryWorkspaceShell>', () => {
 		);
 	});
 
+	it('does not begin native full hydration before replacement admission drains', async () => {
+		let releaseReservation!: (lease: symbol) => void;
+		const reservation = new Promise<symbol>(resolve => {
+			releaseReservation = resolve;
+		});
+		jest
+			.spyOn(
+				ProjectScopedCoreProjectHost.prototype,
+				'acquireProjectReplacement'
+			)
+			.mockReturnValue(reservation);
+		const hydrateProjectFolder = jest.fn(async () => ({
+			passageTextLoaded: true,
+			rootPath: '/native/ordered-project.twine.rs',
+			stories: [],
+			storyIds: []
+		}));
+		(window as any).twineElectron = {hydrateProjectFolder};
+		const {story} = await renderComponent('graph', undefined, {
+			deferWorkspaceQueries: true,
+			configureStory: currentStory => {
+				saveProjectMetadata(currentStory.id, {
+					rootPath: '/native/ordered-project.twine.rs',
+					status: 'file-backed',
+					storageKind: 'electron-project-folder'
+				});
+				markProjectStoryHydration(currentStory.id, {
+					passageTextLoaded: false,
+					rootPath: '/native/ordered-project.twine.rs'
+				});
+			}
+		});
+		await Promise.resolve();
+		expect(hydrateProjectFolder).not.toHaveBeenCalled();
+		releaseReservation(Symbol('replacement'));
+		await waitFor(() =>
+			expect(hydrateProjectFolder).toHaveBeenCalledWith(
+				'/native/ordered-project.twine.rs',
+				[story.id]
+			)
+		);
+	});
+
+	it('does not begin native streamed hydration before replacement admission drains', async () => {
+		let releaseReservation!: (lease: symbol) => void;
+		jest
+			.spyOn(
+				ProjectScopedCoreProjectHost.prototype,
+				'acquireProjectReplacement'
+			)
+			.mockReturnValue(
+				new Promise<symbol>(resolve => (releaseReservation = resolve))
+			);
+		const beginProjectFolderHydration = jest.fn(async () => ({
+			hydrationId: 'stream',
+			passageTextLoaded: true,
+			rootPath: '/native/ordered-stream.twine.rs',
+			stories: []
+		}));
+		(window as any).twineElectron = {
+			beginProjectFolderHydration,
+			finishProjectFolderHydration: jest.fn(async () => {}),
+			readProjectFolderHydrationChunk: jest.fn(async () => ({
+				done: true,
+				nextCursor: 0,
+				passages: []
+			}))
+		};
+		const {story} = await renderComponent('graph', undefined, {
+			deferWorkspaceQueries: true,
+			configureStory: currentStory => {
+				saveProjectMetadata(currentStory.id, {
+					rootPath: '/native/ordered-stream.twine.rs',
+					status: 'file-backed',
+					storageKind: 'electron-project-folder'
+				});
+				markProjectStoryHydration(currentStory.id, {
+					passageTextLoaded: false,
+					rootPath: '/native/ordered-stream.twine.rs'
+				});
+			}
+		});
+		await Promise.resolve();
+		expect(beginProjectFolderHydration).not.toHaveBeenCalled();
+		releaseReservation(Symbol('stream-replacement'));
+		await waitFor(() =>
+			expect(beginProjectFolderHydration).toHaveBeenCalledWith(
+				'/native/ordered-stream.twine.rs',
+				[story.id]
+			)
+		);
+	});
+
+	it('retains one deferred native stream across a pre-Core effect replay', async () => {
+		const source = storyWithLinkedPassages().story;
+		let releaseBegin!: (result: any) => void;
+		const beginCore = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'beginHydratedProject')
+			.mockResolvedValue();
+		const finishCore = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'finishHydratedProject')
+			.mockResolvedValue();
+		jest
+			.spyOn(StoreCoreProjectHost.prototype, 'appendHydratedProjectPassages')
+			.mockResolvedValue();
+		const finishLease = jest.fn(async () => undefined);
+		const beginNative = jest.fn(
+			() => new Promise(resolve => (releaseBegin = resolve))
+		);
+		(window as any).twineElectron = {
+			beginProjectFolderHydration: beginNative,
+			finishProjectFolderHydration: finishLease,
+			readProjectFolderHydrationChunk: jest.fn(async () => ({
+				done: true,
+				nextCursor: source.passages.length,
+				passages: source.passages.map(passage => ({
+					passage,
+					storyId: source.id
+				}))
+			}))
+		};
+		const {story} = await renderComponent('graph', undefined, {
+			deferWorkspaceQueries: true,
+			strictMode: true,
+			configureStory: currentStory => {
+				source.id = currentStory.id;
+				source.passages = source.passages.map(passage => ({
+					...passage,
+					story: currentStory.id
+				}));
+				saveProjectMetadata(currentStory.id, {
+					rootPath: '/native/project.twine.rs',
+					status: 'file-backed',
+					storageKind: 'electron-project-folder'
+				});
+				markProjectStoryHydration(currentStory.id, {
+					passageTextLoaded: false,
+					rootPath: '/native/project.twine.rs'
+				});
+			}
+		});
+		await waitFor(() => expect(beginNative).toHaveBeenCalledTimes(1));
+		releaseBegin({
+			hydrationId: 'deferred-lease',
+			passageCount: source.passages.length,
+			rootPath: '/native/project.twine.rs',
+			stories: [{...source, passages: []}],
+			storyIds: [source.id]
+		});
+		await waitFor(() => expect(finishCore).toHaveBeenCalledTimes(1));
+		expect(beginCore).toHaveBeenCalledTimes(1);
+		expect(finishLease).toHaveBeenCalledWith('deferred-lease');
+		expect(projectStoryHydration(story.id)?.passageTextLoaded).toBe(true);
+	});
+
+	it('closes a deferred native lease on unmount before Core hydration begins', async () => {
+		let releaseBegin!: (result: any) => void;
+		const beginCore = jest.spyOn(
+			StoreCoreProjectHost.prototype,
+			'beginHydratedProject'
+		);
+		const finishLease = jest.fn(async () => undefined);
+		const beginNative = jest.fn(
+			() => new Promise(resolve => (releaseBegin = resolve))
+		);
+		(window as any).twineElectron = {
+			beginProjectFolderHydration: beginNative,
+			finishProjectFolderHydration: finishLease,
+			readProjectFolderHydrationChunk: jest.fn()
+		};
+		const {story, unmount} = await renderComponent('graph', undefined, {
+			deferWorkspaceQueries: true,
+			configureStory: currentStory => {
+				saveProjectMetadata(currentStory.id, {
+					rootPath: '/native/project.twine.rs',
+					status: 'file-backed',
+					storageKind: 'electron-project-folder'
+				});
+				markProjectStoryHydration(currentStory.id, {
+					passageTextLoaded: false,
+					rootPath: '/native/project.twine.rs'
+				});
+			}
+		});
+		await waitFor(() => expect(beginNative).toHaveBeenCalledTimes(1));
+		unmount();
+		releaseBegin({
+			hydrationId: 'unmounted-lease',
+			passageCount: 0,
+			rootPath: '/native/project.twine.rs',
+			stories: [],
+			storyIds: [story.id]
+		});
+		await waitFor(() =>
+			expect(finishLease).toHaveBeenCalledWith('unmounted-lease')
+		);
+		expect(beginCore).not.toHaveBeenCalled();
+	});
+
 	it('streams project-folder passage bodies into the core session', async () => {
 		const source = storyWithLinkedPassages().story;
 		const begin = jest
@@ -491,6 +1219,128 @@ describe('<StoryWorkspaceShell>', () => {
 			])
 		);
 		expect(finishLease).toHaveBeenCalledWith('lease-1');
+	});
+
+	it('aborts a partial core bootstrap and finishes its native lease after a read or append failure', async () => {
+		const source = storyWithLinkedPassages().story;
+		const abort = jest
+			.spyOn(ProjectScopedCoreProjectHost.prototype, 'abortHydratedProject')
+			.mockResolvedValue();
+		jest
+			.spyOn(StoreCoreProjectHost.prototype, 'beginHydratedProject')
+			.mockResolvedValue();
+		const append = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'appendHydratedProjectPassages')
+			.mockResolvedValueOnce()
+			.mockRejectedValueOnce(new Error('append failed'));
+		const finishLease = jest.fn(async () => undefined);
+		let read = 0;
+		(window as any).twineElectron = {
+			beginProjectFolderHydration: jest.fn(async () => ({
+				hydrationId: 'failed-lease',
+				passageCount: source.passages.length,
+				rootPath: '/native/project.twine.rs',
+				stories: [{...source, passages: []}],
+				storyIds: [source.id]
+			})),
+			finishProjectFolderHydration: finishLease,
+			hydrateProjectFolder: jest.fn(),
+			readProjectFolderHydrationChunk: jest.fn(async () => {
+				const passage = source.passages[read++];
+				return {
+					done: read === source.passages.length,
+					nextCursor: read,
+					passages: [{passage, storyId: source.id}]
+				};
+			})
+		};
+		await renderComponent('graph', undefined, {
+			deferWorkspaceQueries: true,
+			configureStory: currentStory => {
+				source.id = currentStory.id;
+				source.passages = source.passages.map(passage => ({
+					...passage,
+					story: currentStory.id
+				}));
+				saveProjectMetadata(currentStory.id, {
+					rootPath: '/native/project.twine.rs',
+					status: 'file-backed',
+					storageKind: 'electron-project-folder'
+				});
+				markProjectStoryHydration(currentStory.id, {
+					passageTextLoaded: false,
+					rootPath: '/native/project.twine.rs'
+				});
+			}
+		});
+		await waitFor(() => expect(finishLease).toHaveBeenCalled());
+		expect(append.mock.calls.length).toBeGreaterThanOrEqual(2);
+		expect(abort).toHaveBeenCalled();
+		expect(finishLease).toHaveBeenCalledWith('failed-lease');
+	});
+
+	it('aborts a superseded stream without merging or routing a late chunk', async () => {
+		const source = storyWithLinkedPassages().story;
+		let releaseRead!: (chunk: any) => void;
+		const append = jest.spyOn(
+			StoreCoreProjectHost.prototype,
+			'appendHydratedProjectPassages'
+		);
+		jest
+			.spyOn(StoreCoreProjectHost.prototype, 'beginHydratedProject')
+			.mockResolvedValue();
+		const abort = jest
+			.spyOn(ProjectScopedCoreProjectHost.prototype, 'abortHydratedProject')
+			.mockResolvedValue();
+		const finishLease = jest.fn(async () => undefined);
+		(window as any).twineElectron = {
+			beginProjectFolderHydration: jest.fn(async () => ({
+				hydrationId: 'superseded-lease',
+				passageCount: source.passages.length,
+				rootPath: '/native/project.twine.rs',
+				stories: [{...source, passages: []}],
+				storyIds: [source.id]
+			})),
+			finishProjectFolderHydration: finishLease,
+			hydrateProjectFolder: jest.fn(),
+			readProjectFolderHydrationChunk: jest.fn(
+				() => new Promise(resolve => (releaseRead = resolve))
+			)
+		};
+		const {story, unmount} = await renderComponent('graph', undefined, {
+			deferWorkspaceQueries: true,
+			configureStory: currentStory => {
+				source.id = currentStory.id;
+				saveProjectMetadata(currentStory.id, {
+					rootPath: '/native/project.twine.rs',
+					status: 'file-backed',
+					storageKind: 'electron-project-folder'
+				});
+				markProjectStoryHydration(currentStory.id, {
+					passageTextLoaded: false,
+					rootPath: '/native/project.twine.rs'
+				});
+			}
+		});
+		await waitFor(() =>
+			expect(
+				(window as any).twineElectron.readProjectFolderHydrationChunk
+			).toHaveBeenCalled()
+		);
+		unmount();
+		await waitFor(() =>
+			expect(abort).toHaveBeenCalledWith(story.id, expect.any(Symbol))
+		);
+		releaseRead({
+			done: true,
+			nextCursor: 1,
+			passages: [{passage: source.passages[0], storyId: story.id}]
+		});
+		await waitFor(() =>
+			expect(finishLease).toHaveBeenCalledWith('superseded-lease')
+		);
+		expect(append).not.toHaveBeenCalled();
+		expect(projectStoryHydration(story.id)?.passageTextLoaded).toBe(false);
 	});
 
 	it('opens indexed story sources from the contents navigator', async () => {
@@ -674,44 +1524,45 @@ describe('<StoryWorkspaceShell>', () => {
 		);
 	});
 
-	it('dispatches executable diagnostic quick fixes', async () => {
+	it('routes executable diagnostic descriptors to plan review without mutating', async () => {
 		const {story, storyDispatch, waitForQueries} = await renderComponent(
 			'text',
 			{
 				bottomDrawerOpen: true
+			},
+			{
+				configureStory: configuredStory => {
+					configuredStory.passages[0].text += ' Then [[Second Missing]].';
+				}
 			}
 		);
 
 		await waitFor(() =>
 			expect(
-				screen.getByRole('button', {name: /Create "Missing"/})
+				screen.getByRole('button', {name: /Review Create "Second Missing"/})
 			).toBeInTheDocument()
 		);
-		fireEvent.click(screen.getByRole('button', {name: /Create "Missing"/}));
+		storyDispatch.mockClear();
+		fireEvent.click(
+			screen.getByRole('button', {name: /Review Create "Second Missing"/})
+		);
 		await waitFor(() =>
-			expect(storyDispatch).toHaveBeenCalledWith(
-				expect.objectContaining({
-					actions: [
-						{
-							type: 'createPassage',
-							props: expect.objectContaining({
-								name: 'Missing',
-								tags: []
-							}),
-							storyId: story.id
-						}
-					],
-					documentUpdates: [
-						expect.objectContaining({
-							storyId: story.id,
-							text: '',
-							type: 'passageText'
-						})
-					],
-					type: 'applyCorePatchBatch'
-				})
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-pathname',
+				`/stories/${story.id}/diagnostics`
 			)
 		);
+		expect(
+			JSON.parse(
+				screen.getByTestId('location').getAttribute('data-state') ?? '{}'
+			)
+		).toMatchObject({
+			diagnosticFixReview: {
+				diagnosticId: expect.stringContaining('Second Missing'),
+				quickFixCommand: 'create-passage:Second Missing'
+			}
+		});
+		expect(storyDispatch).not.toHaveBeenCalled();
 		await waitForQueries();
 	});
 
@@ -722,15 +1573,15 @@ describe('<StoryWorkspaceShell>', () => {
 
 		await waitFor(() =>
 			expect(
-				screen.getByRole('button', {
+				screen.getAllByRole('button', {
 					name: 'routes.storyEdit.workspace.revealInGraph'
 				})
-			).toBeInTheDocument()
+			).toHaveLength(2)
 		);
 		fireEvent.click(
-			screen.getByRole('button', {
+			screen.getAllByRole('button', {
 				name: 'routes.storyEdit.workspace.revealInGraph'
-			})
+			})[1]
 		);
 
 		expect(onRevealPassageInGraph).toHaveBeenCalledWith(start);

@@ -1,10 +1,16 @@
 # Exact-version Harlowe 3.3.9 debugger read support
 
-Status: active
+Status: completed
 Owner: frontend and story-format maintainers
-Last verified: 2026-08-25
+Last verified: 2026-08-26
 Source of truth: bundled Harlowe 3.3.9 artifact, preview-format admission,
 preview instrumentation, Runtime Debugger v1, and shared preview lifecycle
+
+Completion record: PR1, PR2, and PR3 shipped in tagged prerelease
+`v0.2.0-beta.5`. Exact admitted Harlowe 3.3.9 exposes current passage, story
+variables, observed temporary assignments, and visited-passage history while
+drifted or unadmitted artifacts retain the documented current-passage-only
+fallback.
 
 This plan adds exact-version read support for the bundled Harlowe 3.3.9
 runtime without extending that trust to altered, user-added, nearby, or future

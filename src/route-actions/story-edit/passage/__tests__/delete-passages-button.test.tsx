@@ -53,8 +53,19 @@ describe('<DeletePassagesButton>', () => {
 		const story = fakeStory(2);
 
 		story.startPassage = story.passages[1].id;
-		renderComponent({story, passages: story.passages});
+		renderComponent({story, passages: story.passages}, {stories: [story]});
 		expect(screen.getByRole('button', {name: 'common.delete'})).toBeDisabled();
+		fireEvent.keyDown(document.body, {
+			charCode: 46,
+			code: 'Delete',
+			key: 'Delete',
+			keyCode: 46
+		});
+		expect(
+			within(screen.getByTestId('story-inspector-default')).getAllByTestId(
+				/passage-/
+			)
+		).toHaveLength(2);
 	});
 
 	it('deletes passages when clicked', () => {
@@ -82,7 +93,8 @@ describe('<DeletePassagesButton>', () => {
 		let story: Story;
 
 		beforeEach(() => {
-			story = fakeStory(1);
+			story = fakeStory(2);
+			story.startPassage = story.passages[1].id;
 
 			renderComponent(
 				{story, passages: [story.passages[0]]},
@@ -101,7 +113,7 @@ describe('<DeletePassagesButton>', () => {
 				within(screen.getByTestId('story-inspector-default')).queryAllByTestId(
 					/passage-/
 				).length
-			).toBe(0);
+			).toBe(1);
 		});
 
 		it('deletes passages when the Backspace key is pressed', () => {
@@ -115,7 +127,7 @@ describe('<DeletePassagesButton>', () => {
 				within(screen.getByTestId('story-inspector-default')).queryAllByTestId(
 					/passage-/
 				).length
-			).toBe(0);
+			).toBe(1);
 		});
 	});
 
@@ -123,7 +135,8 @@ describe('<DeletePassagesButton>', () => {
 		let story: Story;
 
 		beforeEach(() => {
-			story = fakeStory(1);
+			story = fakeStory(2);
+			story.startPassage = story.passages[1].id;
 
 			renderComponent(
 				{story, passages: [story.passages[0]]},
@@ -142,7 +155,7 @@ describe('<DeletePassagesButton>', () => {
 				within(screen.getByTestId('story-inspector-default')).queryAllByTestId(
 					/passage-/
 				).length
-			).toBe(1);
+			).toBe(2);
 		});
 
 		it("doesn't delete passages when the Backspace key is pressed", () => {
@@ -156,7 +169,7 @@ describe('<DeletePassagesButton>', () => {
 				within(screen.getByTestId('story-inspector-default')).queryAllByTestId(
 					/passage-/
 				).length
-			).toBe(1);
+			).toBe(2);
 		});
 	});
 
@@ -164,7 +177,8 @@ describe('<DeletePassagesButton>', () => {
 		let story: Story;
 
 		beforeEach(() => {
-			story = fakeStory(1);
+			story = fakeStory(2);
+			story.startPassage = story.passages[1].id;
 
 			renderComponent(
 				{story, passages: [story.passages[0]]},
@@ -183,7 +197,7 @@ describe('<DeletePassagesButton>', () => {
 				within(screen.getByTestId('story-inspector-default')).queryAllByTestId(
 					/passage-/
 				).length
-			).toBe(1);
+			).toBe(2);
 		});
 
 		it("doesn't delete passages when the Backspace key is pressed", () => {
@@ -197,7 +211,7 @@ describe('<DeletePassagesButton>', () => {
 				within(screen.getByTestId('story-inspector-default')).queryAllByTestId(
 					/passage-/
 				).length
-			).toBe(1);
+			).toBe(2);
 		});
 	});
 

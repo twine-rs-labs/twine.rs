@@ -111,6 +111,7 @@ export interface SourceEditorDocumentChange {
 }
 
 export interface SourceEditorHandle {
+	applyAuthoritativeEdits: (edits: SourceEditorEdit[]) => void;
 	applyEdits: (
 		edits: SourceEditorEdit[],
 		selections?: SourceEditorSelection[],
@@ -119,11 +120,15 @@ export interface SourceEditorHandle {
 	focus: () => void;
 	getSnapshot: () => SourceEditorSnapshot;
 	isAlive: () => boolean;
+	isComposing?: () => boolean;
+	isCompositionActive?: () => boolean;
 	runCommand: (command: SourceEditorCommand) => boolean;
 	setSelections: (
 		selections: SourceEditorSelection[],
 		mainSelectionIndex?: number
 	) => void;
+	setReadOnly?: (readOnly: boolean) => void;
+	setInputAdmission?: (admitted: boolean) => void;
 	subscribe: (listener: (snapshot: SourceEditorSnapshot) => void) => () => void;
 	subscribeDocumentChanges: (
 		listener: (change: SourceEditorDocumentChange) => void
@@ -143,9 +148,16 @@ export interface SourceEditorProps {
 	onChange: (value: string) => void;
 	onDynamicExtensionError?: (error: Error) => void;
 	placeholderText?: string;
+	preserveFocusOnMount?: boolean;
 	readOnly?: boolean;
 	replaceGenericTwineSyntax?: boolean;
-	revealPosition?: {key: number; position: number};
+	revealPosition?: {
+		end?: number;
+		focus?: 'editor' | 'preserve';
+		key: number;
+		onApplied?: () => void;
+		position: number;
+	};
 	searchQuery?: string;
 	searchRequestKey?: number | string;
 	selfLinkName?: string;
@@ -902,7 +914,8 @@ function baseExtensions(
 		compartments.wrapping.of(EditorView.lineWrapping),
 		// Dynamic extensions are installed after the base view is live so a bad
 		// third-party extension cannot prevent the generic editor from mounting.
-		compartments.dynamic.of([])
+		compartments.dynamic.of([]),
+		EditorState.allowMultipleSelections.of(true)
 	];
 }
 
@@ -932,7 +945,14 @@ export const SourceEditor = React.forwardRef<
 	const viewRef = React.useRef<EditorView | undefined>(undefined);
 	const documentRef = React.useRef(props.value);
 	const valueRef = React.useRef(props.value);
+	const revealFocusIntent = React.useRef(props.revealPosition?.focus);
+	const revealPosition = React.useRef(props.revealPosition?.position);
+	const appliedRevealKey = React.useRef<number | undefined>(undefined);
+	const preserveFocusOnMount = React.useRef(props.preserveFocusOnMount);
 	const onChange = React.useRef(props.onChange);
+	// This is intentionally independent of CodeMirror's read-only extension:
+	// imperative callers and legacy facades can dispatch transactions directly.
+	const inputAdmitted = React.useRef(!props.readOnly);
 	const onDynamicExtensionError = React.useRef(props.onDynamicExtensionError);
 	const compartments = React.useRef(createCompartments()).current;
 	const subscribers = React.useRef(
@@ -942,6 +962,9 @@ export const SourceEditor = React.forwardRef<
 		new Set<(change: SourceEditorDocumentChange) => void>()
 	).current;
 	valueRef.current = props.value;
+	revealFocusIntent.current = props.revealPosition?.focus;
+	revealPosition.current = props.revealPosition?.position;
+	preserveFocusOnMount.current = props.preserveFocusOnMount;
 	const {prefs} = usePrefsContext();
 	const appTheme = useComputedTheme();
 	const reportDynamicExtensionError = React.useCallback(
@@ -991,10 +1014,22 @@ export const SourceEditor = React.forwardRef<
 	React.useImperativeHandle(
 		forwardedRef,
 		() => ({
-			applyEdits(edits, selections, mainSelectionIndex = 0) {
+			applyAuthoritativeEdits(edits) {
 				const view = viewRef.current;
 
 				if (!view) {
+					return;
+				}
+
+				view.dispatch({
+					annotations: controlledValueSync.of(true),
+					changes: edits
+				});
+			},
+			applyEdits(edits, selections, mainSelectionIndex = 0) {
+				const view = viewRef.current;
+
+				if (!view || !inputAdmitted.current) {
 					return;
 				}
 
@@ -1029,10 +1064,16 @@ export const SourceEditor = React.forwardRef<
 			isAlive() {
 				return viewRef.current !== undefined;
 			},
+			isComposing() {
+				return viewRef.current?.compositionStarted ?? false;
+			},
+			isCompositionActive() {
+				return viewRef.current?.compositionStarted ?? false;
+			},
 			runCommand(command) {
 				const view = viewRef.current;
 
-				if (!view) {
+				if (!view || !inputAdmitted.current) {
 					return false;
 				}
 
@@ -1051,6 +1092,22 @@ export const SourceEditor = React.forwardRef<
 							EditorSelection.range(range.anchor, range.head)
 						),
 						Math.max(0, Math.min(mainSelectionIndex, selections.length - 1))
+					)
+				});
+			},
+			setReadOnly(readOnly) {
+				inputAdmitted.current = !readOnly;
+				viewRef.current?.dispatch({
+					effects: compartments.readOnly.reconfigure(
+						EditorState.readOnly.of(readOnly)
+					)
+				});
+			},
+			setInputAdmission(admitted) {
+				inputAdmitted.current = admitted;
+				viewRef.current?.dispatch({
+					effects: compartments.readOnly.reconfigure(
+						EditorState.readOnly.of(!admitted)
 					)
 				});
 			},
@@ -1192,17 +1249,26 @@ export const SourceEditor = React.forwardRef<
 				top: memory.scrollTop ?? 0
 			});
 
-			if (prefs.editorFocusPreference === 'passage-start') {
+			if (
+				prefs.editorFocusPreference === 'passage-start' &&
+				revealPosition.current === undefined &&
+				!preserveFocusOnMount.current
+			) {
 				view.dispatch({selection: {anchor: 0}});
 			}
 
-			if (prefs.editorFocusPreference !== 'none') {
+			if (
+				revealFocusIntent.current !== 'preserve' &&
+				!preserveFocusOnMount.current &&
+				prefs.editorFocusPreference !== 'none'
+			) {
 				view.focus();
 			}
 		});
 
 		return () => {
 			window.cancelAnimationFrame(focusFrame);
+			appliedRevealKey.current = undefined;
 			recordPerformanceHarnessEvent('source-editor-view-destroyed', {
 				editorId: props.id,
 				memoryKey: props.memoryKey ?? ''
@@ -1219,6 +1285,7 @@ export const SourceEditor = React.forwardRef<
 
 	React.useEffect(() => {
 		const view = viewRef.current;
+		inputAdmitted.current = !(props.readOnly ?? false);
 
 		view?.dispatch({
 			effects: compartments.theme.reconfigure(
@@ -1359,20 +1426,48 @@ export const SourceEditor = React.forwardRef<
 		if (!view || position === undefined) {
 			return;
 		}
+		if (appliedRevealKey.current === props.revealPosition?.key) {
+			return;
+		}
 
 		const clampedPosition = Math.max(
 			0,
 			Math.min(Math.trunc(position), view.state.doc.length)
 		);
+		const requestedEnd = props.revealPosition?.end;
+		const clampedEnd =
+			requestedEnd === undefined
+				? clampedPosition
+				: Math.max(
+						clampedPosition,
+						Math.min(Math.trunc(requestedEnd), view.state.doc.length)
+					);
+		if (
+			props.revealPosition?.focus === 'preserve' &&
+			(position > view.state.doc.length ||
+				(requestedEnd !== undefined && requestedEnd > view.state.doc.length))
+		) {
+			return;
+		}
 
 		view.dispatch({
 			effects: EditorView.scrollIntoView(clampedPosition, {
 				y: 'center'
 			}),
-			selection: {anchor: clampedPosition}
+			selection: {anchor: clampedPosition, head: clampedEnd}
 		});
-		view.focus();
-	}, [props.revealPosition?.key, props.revealPosition?.position]);
+		if (props.revealPosition?.focus !== 'preserve') {
+			view.focus();
+		}
+		appliedRevealKey.current = props.revealPosition?.key;
+		props.revealPosition?.onApplied?.();
+	}, [
+		props.revealPosition?.end,
+		props.revealPosition?.focus,
+		props.revealPosition?.key,
+		props.revealPosition?.position,
+		props.value
+	]);
 
 	const codeFont = (props.language ?? 'twine') !== 'twine';
 	const fontFamily = codeFont

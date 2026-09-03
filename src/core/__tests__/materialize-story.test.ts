@@ -1,5 +1,5 @@
 import {fakeStory} from '../../test-util';
-import type {CoreProjectHost} from '../project-host';
+import type {CoreProjectHost} from '../project-host-public';
 import {
 	materializeStoryFromSession,
 	materializeStorySnapshotFromSession

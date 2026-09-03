@@ -878,6 +878,173 @@ async function replaceEditorText(page: Page, text: string) {
 	await page.keyboard.press('Tab');
 }
 
+test('packaged desktop navigates definitions and applies reviewed diagnostic fixes', async ({}, testInfo) => {
+	const executablePath = await packagedExecutable();
+	const profileRoot = await mkdtemp(
+		path.join(os.tmpdir(), 'twine-rs-packaged-navigation-')
+	);
+	let running: RunningPackagedApp | undefined;
+
+	try {
+		running = await launchPackagedApp(executablePath, profileRoot);
+		const {page} = running;
+
+		await page.getByTitle('New Project').click();
+		await page.getByLabel('Project name').fill('Packaged Navigation');
+		await tabWithText(page, 'Text').click();
+		await page.getByRole('button', {name: 'Create Project'}).click();
+		await replaceEditorText(page, '😀 [[ Next ]] and [[Again->Next]].');
+
+		const nextPassage = page
+			.getByRole('listitem')
+			.filter({has: page.getByText('Next', {exact: true})})
+			.getByRole('button');
+		await expect(nextPassage).toBeVisible();
+		await nextPassage.click();
+		await page.getByRole('button', {name: 'Command'}).click();
+		let referenceCommandInput = page.getByRole('textbox', {name: 'Command'});
+		await expect(referenceCommandInput).toBeFocused();
+		await referenceCommandInput.fill('Find References');
+		await expect(
+			page.getByRole('option', {name: /Find References/})
+		).toHaveAttribute('aria-selected', 'true');
+		await referenceCommandInput.press('Enter');
+		let references = page.getByRole('dialog', {name: 'References to Next'});
+
+		await expect(
+			references.getByRole('heading', {name: 'References to Next'})
+		).toBeFocused();
+		const referencesBox = await references.boundingBox();
+		const referencesViewport = await page.evaluate(() => ({
+			height: window.innerHeight,
+			width: window.innerWidth
+		}));
+		expect(referencesBox).not.toBeNull();
+		expect(referencesBox!.x + referencesBox!.width).toBeLessThanOrEqual(
+			referencesViewport.width
+		);
+		expect(referencesBox!.y + referencesBox!.height).toBeLessThanOrEqual(
+			referencesViewport.height
+		);
+		await expect(references.getByRole('heading', {name: 'Start'})).toHaveCount(
+			2
+		);
+		await page.keyboard.press('Escape');
+		await expect(references).toHaveCount(0);
+		await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
+		await page.getByRole('button', {name: 'Command'}).click();
+		referenceCommandInput = page.getByRole('textbox', {name: 'Command'});
+		await expect(referenceCommandInput).toBeFocused();
+		await referenceCommandInput.fill('Find References');
+		await expect(
+			page.getByRole('option', {name: /Find References/})
+		).toHaveAttribute('aria-selected', 'true');
+		await referenceCommandInput.press('Enter');
+		references = page.getByRole('dialog', {name: 'References to Next'});
+
+		await expect(references.getByRole('heading', {name: 'Start'})).toHaveCount(
+			2
+		);
+		await references
+			.getByRole('button', {name: 'Reveal in Source'})
+			.first()
+			.click();
+		await expect(
+			page.getByRole('region', {name: 'Start', exact: true})
+		).toBeVisible();
+		await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
+		await expect(page).toHaveURL(/offset=\d+&end=\d+/);
+
+		const definition = page
+			.getByRole('button')
+			.filter({hasText: 'Next'})
+			.filter({hasText: 'Go to Definition'});
+		await expect(definition).toHaveCount(1);
+		await definition.click();
+		await expect(
+			page.getByRole('region', {name: 'Next', exact: true})
+		).toBeVisible();
+		await replaceEditorText(page, 'Next passage. [[Packaged Missing]].');
+		const missingPassage = page
+			.getByRole('listitem')
+			.filter({has: page.getByText('Packaged Missing', {exact: true})})
+			.getByRole('button');
+		await expect(missingPassage).toBeVisible();
+		await missingPassage.click();
+		await page.getByRole('tab', {name: 'Story', exact: true}).click();
+		await page.keyboard.press('Delete');
+		await expect(missingPassage).toBeVisible();
+		await page.getByRole('tab', {name: 'Passage', exact: true}).click();
+		await page.keyboard.press('Delete');
+		await expect(missingPassage).toHaveCount(0);
+		await page.getByTitle('Diagnostics').click();
+		await expect(page.getByText('broken-link').first()).toBeVisible();
+		await page.getByRole('button', {name: 'Command'}).click();
+		const fixCommandInput = page.getByRole('textbox', {name: 'Command'});
+		await expect(fixCommandInput).toBeFocused();
+		await fixCommandInput.fill('Fix All Safe');
+		await expect(
+			page.getByRole('option', {name: /Fix All Safe/})
+		).toHaveAttribute('aria-selected', 'true');
+		await fixCommandInput.press('Enter');
+		const fixReview = page.getByRole('dialog', {
+			name: 'Review Diagnostic Fixes'
+		});
+		await expect(
+			fixReview.getByRole('heading', {name: 'Review Diagnostic Fixes'})
+		).toBeFocused();
+		const fixReviewBox = await fixReview.boundingBox();
+		const fixReviewViewport = await page.evaluate(() => ({
+			height: window.innerHeight,
+			width: window.innerWidth
+		}));
+		expect(fixReviewBox).not.toBeNull();
+		expect(fixReviewBox!.x + fixReviewBox!.width).toBeLessThanOrEqual(
+			fixReviewViewport.width
+		);
+		expect(fixReviewBox!.y + fixReviewBox!.height).toBeLessThanOrEqual(
+			fixReviewViewport.height
+		);
+		await expect(fixReview.getByText('Add passage')).toBeVisible();
+		await expect(
+			fixReview.getByText('Packaged Missing', {exact: true})
+		).toBeVisible();
+		await fixReview.getByRole('button', {name: 'Cancel'}).click();
+		await expect(fixReview).toHaveCount(0);
+		await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
+		await page.getByRole('button', {name: 'Command'}).click();
+		const applyFixCommandInput = page.getByRole('textbox', {name: 'Command'});
+		await expect(applyFixCommandInput).toBeFocused();
+		await applyFixCommandInput.fill('Fix All Safe');
+		await expect(
+			page.getByRole('option', {name: /Fix All Safe/})
+		).toHaveAttribute('aria-selected', 'true');
+		await applyFixCommandInput.press('Enter');
+		const applyFixReview = page.getByRole('dialog', {
+			name: 'Review Diagnostic Fixes'
+		});
+		await expect(
+			applyFixReview.getByRole('heading', {name: 'Review Diagnostic Fixes'})
+		).toBeFocused();
+		await applyFixReview.getByRole('button', {name: 'Apply Fixes'}).click();
+		await expect(applyFixReview).toHaveCount(0);
+		await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
+		await page.getByTitle('Contents').click();
+		await expect(
+			page.getByText('Packaged Missing', {exact: true}).first()
+		).toBeVisible();
+	} catch (error) {
+		if (running) {
+			await attachPackagedAppShutdownDiagnostics(testInfo, running, error);
+		}
+		throw error;
+	} finally {
+		if (running) {
+			await cleanupPackagedApp(running);
+		}
+	}
+});
+
 test('packaged desktop duplicates a project from the launcher and preserves it across restart and source deletion', async ({}, testInfo) => {
 	const executablePath = await packagedExecutable();
 	const profileRoot = await mkdtemp(
@@ -1668,6 +1835,78 @@ test('packaged app preserves sibling stories across full save, rename, and reope
 			'Packaged save survived the native bridge.',
 			testInfo
 		);
+		await tabWithText(page, 'Story').click();
+		await page.getByRole('button', {name: 'Command'}).click();
+		let renameCommandInput = page.getByRole('textbox', {name: 'Command'});
+		await expect(renameCommandInput).toBeFocused();
+		await renameCommandInput.fill('Rename Active Passage');
+		await expect(
+			page.getByRole('option', {name: /Rename Active Passage/})
+		).toHaveAttribute('aria-selected', 'true');
+		await renameCommandInput.press('Enter');
+		let renamePrompt = page.getByRole('dialog', {
+			name: 'What should “Start” be renamed to?'
+		});
+		await expect(renamePrompt.getByRole('textbox')).toBeFocused();
+		const renamePromptBox = await renamePrompt.boundingBox();
+		const renameViewport = await page.evaluate(() => ({
+			height: window.innerHeight,
+			width: window.innerWidth
+		}));
+		expect(renamePromptBox).not.toBeNull();
+		expect(
+			Math.abs(
+				renamePromptBox!.x +
+					renamePromptBox!.width / 2 -
+					renameViewport.width / 2
+			)
+		).toBeLessThan(2);
+		await renamePrompt.getByRole('button', {name: 'Cancel'}).click();
+		await expect(renamePrompt).toHaveCount(0);
+		await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
+		await expect(
+			page.getByRole('region', {name: 'Start', exact: true})
+		).toBeVisible();
+		await page.getByRole('button', {name: 'Command'}).click();
+		renameCommandInput = page.getByRole('textbox', {name: 'Command'});
+		await expect(renameCommandInput).toBeFocused();
+		await renameCommandInput.fill('Rename Active Passage');
+		await expect(
+			page.getByRole('option', {name: /Rename Active Passage/})
+		).toHaveAttribute('aria-selected', 'true');
+		await renameCommandInput.press('Enter');
+		renamePrompt = page.getByRole('dialog', {
+			name: 'What should “Start” be renamed to?'
+		});
+		await renamePrompt.getByRole('textbox').fill('Packaged Start');
+		await renamePrompt.getByRole('button', {name: 'Save'}).click();
+		const renameReview = page.getByRole('dialog', {
+			name: 'Review Passage Rename'
+		});
+		await expect(
+			renameReview.getByRole('heading', {name: 'Review Passage Rename'})
+		).toBeFocused();
+		await expect(renameReview.getByText('Rename passage')).toBeVisible();
+		await renameReview.getByRole('button', {name: 'Apply Rename'}).click();
+		await expect(renameReview).toHaveCount(0);
+		await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
+		await expect(
+			page.getByRole('region', {name: 'Packaged Start', exact: true})
+		).toBeVisible();
+		await expect
+			.poll(() =>
+				page.evaluate(async rootPath => {
+					const bridge = (window as PackagedProjectWindow).twineElectron;
+
+					if (!bridge) {
+						throw new Error('Desktop project bridge is unavailable.');
+					}
+					const hydrated = await bridge.hydrateProjectFolder(rootPath);
+
+					return hydrated.stories[0]?.passages[0]?.name;
+				}, projectRoot)
+			)
+			.toBe('Packaged Start');
 
 		const siblingSave = await page.evaluate(
 			async ({
@@ -2031,6 +2270,34 @@ test('packaged app preserves sibling stories across full save, rename, and reope
 		await expect(
 			searchPanel.getByRole('textbox', {name: 'Find'})
 		).toBeVisible();
+		await searchPanel.getByRole('textbox', {name: 'Find'}).fill('Packaged');
+		await searchPanel
+			.getByRole('textbox', {name: 'Replace With'})
+			.fill('Reviewed');
+		await searchPanel.getByText('Include Passage Names', {exact: true}).click();
+		await searchPanel
+			.getByText('Include Story JavaScript', {exact: true})
+			.click();
+		await searchPanel
+			.getByText('Include Story Stylesheet', {exact: true})
+			.click();
+		await searchPanel
+			.getByRole('button', {name: 'Replace In Story Sources'})
+			.click();
+		const replaceReview = page.getByRole('dialog', {
+			name: 'Review Project Replacement'
+		});
+		await expect(replaceReview.getByText('1 change')).toBeVisible();
+		await replaceReview
+			.getByRole('button', {name: 'Apply Replacement'})
+			.click();
+		await expect(replaceReview).toHaveCount(0);
+		await waitForSavedText(
+			running,
+			projectRoot,
+			'Reviewed save survived the native bridge.',
+			testInfo
+		);
 
 		await page.keyboard.press('Escape');
 		await page.getByTitle('New Project').click();
@@ -2095,7 +2362,7 @@ test('packaged app preserves sibling stories across full save, rename, and reope
 			.filter({hasText: /^Text$/})
 			.click();
 		await expect(sourceEditor(running.page)).toContainText(
-			'Packaged save survived the native bridge.'
+			'Reviewed save survived the native bridge.'
 		);
 		await running.page.evaluate(() => {
 			window.location.hash = '#/';

@@ -11,7 +11,7 @@ import {
 	useParams
 } from 'react-router';
 import {AppShell} from '../../../components/app-shell';
-import {StoreCoreProjectHost} from '../../../core/project-host';
+import {StoreCoreProjectHost} from '../../../test-util/core-project-host-runtime';
 import {selectPassage, Story, useStoriesContext} from '../../../store/stories';
 import {useStoryFormatsContext} from '../../../store/story-formats';
 import {
@@ -32,6 +32,12 @@ import {
 	rejectStoryEditReveal
 } from '../../story-edit-reveal';
 import * as storyEditReveal from '../../story-edit-reveal';
+import {
+	allocateSourceNavigationFocusPreservationLease,
+	releaseSourceNavigationFocusPreservationLease,
+	sourceTarget
+} from '../source-navigation';
+import * as sourceNavigation from '../source-navigation';
 
 const HistoryBackButton: React.FC = () => {
 	const navigate = useNavigate();
@@ -1039,8 +1045,97 @@ describe('<StoryEditRoute>', () => {
 			await screen.findByTestId(`story-editor-window-${story.id}:stylesheet`)
 		).toBeInTheDocument();
 		expect(
-			screen.getByLabelText('routes.storyEdit.toolbar.stylesheet')
+			screen.getByRole('region', {
+				name: 'routes.storyEdit.toolbar.stylesheet'
+			})
 		).toBeInTheDocument();
+	});
+
+	it('downgrades a direct preserve source URL without a live lease to editor focus', async () => {
+		const story = fakeStory(1);
+		const {container} = await renderComponent(story, undefined, candidate =>
+			sourceTarget(candidate, {
+				focus: 'preserve',
+				offset: 0,
+				restoreToken: 'reloaded-token',
+				target: {kind: 'passage', passageId: candidate.passages[0].id}
+			})
+		);
+
+		expect(container.querySelector<HTMLElement>('.cm-content')).toHaveFocus();
+	});
+
+	it('claims and carries a live preserve lease for an exact source reveal', async () => {
+		const story = fakeStory(1);
+		story.passages[0].text = '0123456789';
+		const token = allocateSourceNavigationFocusPreservationLease();
+		const claim = jest.spyOn(
+			sourceNavigation,
+			'claimSourceNavigationFocusPreservationLease'
+		);
+		const {container} = await renderComponent(story, undefined, candidate =>
+			sourceTarget(candidate, {
+				endOffset: 7,
+				focus: 'preserve',
+				offset: 2,
+				restoreToken: token,
+				target: {kind: 'passage', passageId: candidate.passages[0].id}
+			})
+		);
+		expect(claim).toHaveBeenCalledWith(token);
+		await waitFor(() => {
+			const content = container.querySelector<HTMLElement>(
+				`[data-testid="story-editor-window-${story.passages[0].id}"] .cm-content`
+			);
+			const view = content ? EditorView.findFromDOM(content) : undefined;
+
+			expect(view?.state.selection.main).toMatchObject({anchor: 2, head: 7});
+		});
+	});
+
+	it('downgrades an async passage-line preserve request without claiming its lease', async () => {
+		const story = fakeStory(1);
+		story.passages[0].text = 'First line\nSecond line';
+		const token = allocateSourceNavigationFocusPreservationLease();
+		const claim = jest.spyOn(
+			sourceNavigation,
+			'claimSourceNavigationFocusPreservationLease'
+		);
+
+		try {
+			const {container} = await renderComponent(story, undefined, candidate =>
+				sourceTarget(candidate, {
+					focus: 'preserve',
+					line: 2,
+					restoreToken: token,
+					target: {kind: 'passage', passageId: candidate.passages[0].id}
+				})
+			);
+
+			expect(claim).not.toHaveBeenCalledWith(token);
+			expect(container.querySelector<HTMLElement>('.cm-content')).toHaveFocus();
+		} finally {
+			releaseSourceNavigationFocusPreservationLease(token);
+		}
+	});
+
+	it('downgrades a consumed preserve lease URL on replay', async () => {
+		const story = fakeStory(1);
+		const token = allocateSourceNavigationFocusPreservationLease();
+		const entry = (candidate: Story) =>
+			sourceTarget(candidate, {
+				focus: 'preserve',
+				offset: 0,
+				restoreToken: token,
+				target: {kind: 'passage', passageId: candidate.passages[0].id}
+			});
+		const first = await renderComponent(story, undefined, entry);
+		first.unmount();
+
+		const replay = await renderComponent(story, undefined, entry);
+		expect(
+			replay.container.querySelector<HTMLElement>('.cm-content')
+		).toHaveFocus();
 	});
 
 	it('acknowledges a correlated source reveal only after committed editor state', async () => {

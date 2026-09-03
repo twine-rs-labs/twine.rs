@@ -1,15 +1,17 @@
-# Performance optimization
+# Performance reliability and optimization
 
 Status: active
 Owner: performance and architecture maintainers
-Last verified: 2026-08-03
+Last verified: 2026-08-30
 Source of truth: outstanding work revealed by accepted 10k/50k baselines
 
 ## Objective
 
-Bring the structurally correct Rust/WASM/Electron path toward the tracked
-roadmap budgets without weakening session ownership, watcher incrementality, or
-fixture isolation.
+Make the structurally correct Rust/WASM/Electron path meet its accepted
+large-project budgets. Treat every failed regression threshold as active
+evidence until a clean candidate passes. Implement only bounded optimizations
+with a reproduced owner, without weakening session ownership, watcher
+incrementality, fixture isolation, or feature-specific performance gates.
 
 ## Work order
 
@@ -63,8 +65,11 @@ fixture isolation.
 - Save acknowledgement now merges only dirty fingerprint fields into the saved
   map. It preserves untouched key allocations and handles create/delete without
   the previous 500k-entry clone and its roughly 12–21 MiB WASM high-water cost.
-- Memory contract 3 reports live and post-GC process working sets plus renderer
-  heap, main heap/external memory, WASM, and residual runtime ownership. The
+- Memory contract 5 reports live and post-GC process working sets plus renderer
+  heap, main heap/external memory, CDP-observed worker heap `usedSize`, WASM,
+  and residual runtime ownership. The CDP target is one bundled worker only;
+  unsupported, ambiguous, detached, or drifted observations fail the perf
+  checkpoint rather than falling back to worker `performance.memory`. The
   latest query split is about 632 MiB Tab, 394 MiB Browser, 106 MiB GPU, and
   48 MiB Utility; finer attribution should focus on the 459 MiB renderer and
   358 MiB main native/runtime residuals rather than React documents or query
@@ -153,9 +158,18 @@ fixture isolation.
 Exit signal: shell and interactive phases show a material baseline improvement
 with unchanged structural assertions.
 
-### 2. Incremental indexing and edit-to-paint — in progress
+### 2. Incremental indexing and edit-to-paint — active
 
-- The released-beta 10k refresh exposed a blocking edit tail after the July 18
+- The beta.5 comparison at `114a60ba` completed both five-phase suites with
+  structural invariants intact. The 10k edit-paint result exceeded its computed
+  regression limit by 0.80 ms, and 50k resident memory exceeded its computed
+  limit by about 3.90 MiB. These are failed regression checks, not candidates for
+  baseline replacement. Subsequent exact-source controls reproduced the edit
+  tail and isolated an unconditional project-wide passage clone in the ordinary
+  text-edit path; the bounded fix and clean candidate evidence remain active
+  work.
+
+- The 10k baseline refresh exposed a blocking edit tail after the July 18
   baseline. A Harlowe-disabled control and renderer profile attributed the
   timing-dependent stall to `beginLegacyStoryWrite` waiting in
   `ipcRenderer.sendSync`, not native Harlowe parsing, renderer GC, Rust/WASM

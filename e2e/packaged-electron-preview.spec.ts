@@ -611,12 +611,23 @@ async function createPassage(page: Page, name: string, text: string) {
 	await expect(
 		page.getByRole('region', {name: /Untitled Passage/})
 	).toBeVisible();
-	await page.getByRole('button', {name: 'Rename', exact: true}).click();
+	const renameButton = page.getByRole('button', {name: 'Rename', exact: true});
+
+	await renameButton.click();
 	const renameDialog = page.getByRole('dialog').last();
 
 	await expect(renameDialog).toBeVisible();
 	await renameDialog.getByRole('textbox').fill(name);
 	await renameDialog.getByRole('button', {name: 'Save'}).click();
+	const renameReview = page.getByRole('dialog', {
+		name: 'Review Passage Rename'
+	});
+
+	await expect(renameReview).toBeVisible();
+	await expect(renameReview.getByText('Rename passage')).toBeVisible();
+	await renameReview.getByRole('button', {name: 'Apply Rename'}).click();
+	await expect(renameReview).toHaveCount(0);
+	await expect(renameButton).toBeFocused();
 	await expect(page.getByRole('region', {name})).toBeVisible();
 	await replaceEditorText(page, text, name);
 }

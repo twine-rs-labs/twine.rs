@@ -1,6 +1,6 @@
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
-import {IconButton, PromptIconButton} from '../design-system';
+import {IconButton, PromptPopover} from '../design-system';
 import {Passage, Story} from '../../store/stories';
 
 const DisabledRenamePassageButton: React.FC = () => {
@@ -15,14 +15,29 @@ export interface EnabledRenamePassageButtonProps {
 	story: Story;
 }
 
-export const EnabledRenamePassageButton: React.FC<
-	EnabledRenamePassageButtonProps
-> = props => {
-	const {onRename, passage, story} = props;
+export interface PassageRenamePromptProps {
+	anchor?: HTMLElement | null;
+	onCancel: () => void;
+	onRename: (value: string) => void;
+	open: boolean;
+	passage: Passage;
+	story: Story;
+}
+
+export const PassageRenamePrompt: React.FC<PassageRenamePromptProps> = ({
+	anchor,
+	onCancel,
+	onRename,
+	open,
+	passage,
+	story
+}) => {
 	const [newName, setNewName] = React.useState(passage.name);
 	const {t} = useTranslation();
 
-	React.useEffect(() => setNewName(passage.name), [passage]);
+	React.useEffect(() => {
+		if (open) setNewName(passage.name);
+	}, [open, passage.id, passage.name]);
 
 	function validate(name: string) {
 		if (name.trim() === '') {
@@ -43,18 +58,52 @@ export const EnabledRenamePassageButton: React.FC<
 	}
 
 	return (
-		<PromptIconButton
+		<PromptPopover
+			anchor={anchor}
 			cancelLabel={t('common.cancel')}
 			confirmLabel={t('common.save')}
-			icon="writing"
-			label={t('common.rename')}
-			onCancel={() => setNewName(passage.name)}
+			onCancel={onCancel}
 			onChange={setNewName}
 			onSubmit={onRename}
+			open={open}
 			prompt={t('common.renamePrompt', {name: passage.name})}
 			validate={validate}
 			value={newName}
 		/>
+	);
+};
+
+export const EnabledRenamePassageButton: React.FC<
+	EnabledRenamePassageButtonProps
+> = props => {
+	const {onRename, passage, story} = props;
+	const [open, setOpen] = React.useState(false);
+	const buttonRef = React.useRef<HTMLButtonElement | null>(null);
+	const {t} = useTranslation();
+
+	return (
+		<span className="tw-prompt-icon">
+			<IconButton
+				icon="writing"
+				label={t('common.rename')}
+				onClick={() => setOpen(value => !value)}
+				ref={buttonRef}
+			/>
+			<PassageRenamePrompt
+				anchor={buttonRef.current}
+				onCancel={() => {
+					setOpen(false);
+					window.requestAnimationFrame(() => buttonRef.current?.focus());
+				}}
+				onRename={value => {
+					onRename(value);
+					setOpen(false);
+				}}
+				open={open}
+				passage={passage}
+				story={story}
+			/>
+		</span>
 	);
 };
 

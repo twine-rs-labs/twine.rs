@@ -56,6 +56,28 @@ async function setPassageText(page: Page, text: string) {
 	await page.waitForTimeout(450);
 }
 
+async function runPaletteCommand(
+	page: Page,
+	query: string,
+	optionName: string | RegExp = query
+) {
+	const trigger = page.getByRole('button', {name: 'Command'});
+	await trigger.focus();
+	await trigger.press('Enter');
+	const palette = page.getByRole('dialog').filter({
+		has: page.getByRole('textbox', {name: 'Command'})
+	});
+	const input = palette.getByRole('textbox', {name: 'Command'});
+
+	await expect(input).toBeFocused();
+	await input.fill(query);
+	await expect(
+		palette.getByRole('option', {name: optionName}).first()
+	).toBeVisible();
+	await input.press('Enter');
+	await expect(palette).toHaveCount(0);
+}
+
 async function selectPassage(page: Page, name: string) {
 	const passage = page
 		.getByRole('listitem')
@@ -212,6 +234,337 @@ test('persists embedded source-editor passage edits', async ({page}) => {
 	await expect(sourceEditor(page)).toContainText(
 		'Smoke text survives a reload.'
 	);
+});
+
+test('reviews a passage rename before applying its standard-link edits atomically', async ({
+	page
+}) => {
+	await createProject(page, 'Reviewed passage rename smoke');
+	await setPassageText(page, 'Start [[Next]] and [[Again->Next]].');
+	await selectPassage(page, 'Next');
+	const nextPassage = page.getByRole('listitem').filter({hasText: /^Next$/});
+	await page.getByRole('tab', {name: 'Story', exact: true}).click();
+	await page.keyboard.press('Delete');
+	await expect(nextPassage).toBeVisible();
+	await page.getByRole('tab', {name: 'Passage', exact: true}).click();
+	await page.keyboard.press('Delete');
+	await expect(nextPassage).toHaveCount(0);
+	await page.getByRole('button', {name: /^Undo Delete Passage/}).click();
+	await expect(nextPassage).toBeVisible();
+	await selectPassage(page, 'Next');
+	await page.getByRole('button', {name: 'Rename', exact: true}).click();
+
+	const renamePrompt = page.getByRole('dialog', {
+		name: 'What should “Next” be renamed to?'
+	});
+	await renamePrompt.getByRole('textbox').fill('Continue');
+	await renamePrompt.getByRole('button', {name: 'Save'}).click();
+
+	const review = page.getByRole('dialog', {name: 'Review Passage Rename'});
+	await expect(review).toBeVisible();
+	await expect(
+		review.getByText(
+			'Standard Twine links are covered. Format-specific references may be missed or unchanged.'
+		)
+	).toBeVisible();
+	await expect(review.getByText('Rename passage')).toBeVisible();
+	await expect(review.getByText('Edit source text')).toHaveCount(2);
+	await expect(
+		page.getByRole('listitem').filter({hasText: /^Next$/})
+	).toBeVisible();
+	await expect(
+		page.getByRole('listitem').filter({hasText: /^Continue$/})
+	).toHaveCount(0);
+
+	await setPassageText(
+		page,
+		'Editing stays available while rename review is open.'
+	);
+	await expect(review).toBeVisible();
+	await review.getByRole('button', {name: 'Apply Rename'}).click();
+	await expect(review.getByRole('alert')).toContainText(
+		'stale-project-revision'
+	);
+	await review.getByRole('button', {name: 'Retry review'}).click();
+	await expect(review.getByText('Rename passage')).toBeVisible();
+	await review.getByRole('button', {name: 'Apply Rename'}).click();
+	await expect(review).toHaveCount(0);
+	await expect(
+		page.getByRole('button', {name: 'Rename', exact: true})
+	).toBeFocused();
+	await expect(
+		page.getByRole('listitem').filter({hasText: /^Continue$/})
+	).toBeVisible();
+	await selectPassage(page, 'Start');
+	const startEditor = page.getByRole('region', {name: 'Start', exact: true});
+	await expect(startEditor).toContainText(
+		'Start [[Continue]] and [[Again->Continue]].'
+	);
+
+	await page.getByRole('button', {name: /^Undo /}).click();
+	await expect(
+		page.getByRole('listitem').filter({hasText: /^Next$/})
+	).toBeVisible();
+	await expect(startEditor).toContainText(
+		'Start [[Next]] and [[Again->Next]].'
+	);
+
+	await page.getByRole('button', {name: /^Redo /}).click();
+	await expect(
+		page.getByRole('listitem').filter({hasText: /^Continue$/})
+	).toBeVisible();
+	await expect(startEditor).toContainText(
+		'Start [[Continue]] and [[Again->Continue]].'
+	);
+
+	await page.getByRole('tab', {name: 'Story', exact: true}).click();
+	await runPaletteCommand(page, 'Rename Active Passage');
+	const escapePrompt = page.getByRole('dialog', {
+		name: 'What should “Start” be renamed to?'
+	});
+	const escapePromptInput = escapePrompt.getByRole('textbox');
+	await expect(escapePromptInput).toBeFocused();
+	const escapePromptBox = await escapePrompt.boundingBox();
+	const viewport = page.viewportSize();
+	expect(escapePromptBox).not.toBeNull();
+	expect(viewport).not.toBeNull();
+	expect(
+		Math.abs(
+			escapePromptBox!.x + escapePromptBox!.width / 2 - viewport!.width / 2
+		)
+	).toBeLessThan(2);
+	expect(
+		Math.abs(
+			escapePromptBox!.y + escapePromptBox!.height / 2 - viewport!.height / 2
+		)
+	).toBeLessThan(2);
+	await escapePromptInput.fill('Home');
+	await escapePromptInput.press(
+		process.platform === 'darwin' ? 'Meta+K' : 'Control+K'
+	);
+	await expect(page.getByRole('textbox', {name: 'Command'})).toHaveCount(0);
+	await escapePrompt.getByRole('button', {name: 'Cancel'}).click();
+	await expect(escapePrompt).toHaveCount(0);
+	await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
+	await expect(
+		page.getByRole('region', {name: 'Start', exact: true})
+	).toBeVisible();
+
+	await runPaletteCommand(page, 'Rename Active Passage');
+	const reviewPrompt = page.getByRole('dialog', {
+		name: 'What should “Start” be renamed to?'
+	});
+	await reviewPrompt.getByRole('textbox').fill('Home');
+	await reviewPrompt.getByRole('button', {name: 'Save'}).click();
+	await expect(review).toBeVisible();
+	await expect(
+		review.getByRole('heading', {name: 'Review Passage Rename'})
+	).toBeFocused();
+	await page.keyboard.press('Escape');
+	await expect(review).toHaveCount(0);
+	await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
+
+	await runPaletteCommand(page, 'Rename Active Passage');
+	const cancelPrompt = page.getByRole('dialog', {
+		name: 'What should “Start” be renamed to?'
+	});
+	await cancelPrompt.getByRole('textbox').fill('Beginning');
+	await cancelPrompt.getByRole('button', {name: 'Save'}).click();
+	await expect(review).toBeVisible();
+	await review.getByRole('button', {name: 'Cancel'}).click();
+	await expect(review).toHaveCount(0);
+	await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
+});
+
+test('finds passage references and navigates only exact definitions', async ({
+	page
+}) => {
+	await createProject(page, 'Passage navigation smoke');
+	await setPassageText(page, '😀 [[ Next ]] and [[Again->Next]].');
+	await selectPassage(page, 'Next');
+
+	const editorContent = sourceEditor(page).locator('.cm-content');
+
+	await editorContent.focus();
+	await page.keyboard.press(
+		process.platform === 'darwin' ? 'Meta+K' : 'Control+K'
+	);
+	let commandPalette = page.getByRole('dialog').filter({
+		has: page.getByRole('textbox', {name: 'Command'})
+	});
+	let commandInput = commandPalette.getByRole('textbox', {name: 'Command'});
+
+	await expect(commandInput).toBeFocused();
+	await commandInput.press('Escape');
+	await expect(editorContent).toBeFocused();
+
+	await page.keyboard.press(
+		process.platform === 'darwin' ? 'Meta+K' : 'Control+K'
+	);
+	commandPalette = page.getByRole('dialog').filter({
+		has: page.getByRole('textbox', {name: 'Command'})
+	});
+	commandInput = commandPalette.getByRole('textbox', {name: 'Command'});
+	await expect(commandInput).toBeFocused();
+	await commandPalette.locator('..').click({position: {x: 2, y: 2}});
+	await expect(editorContent).toBeFocused();
+
+	await page.keyboard.press(
+		process.platform === 'darwin' ? 'Meta+K' : 'Control+K'
+	);
+	commandPalette = page.getByRole('dialog').filter({
+		has: page.getByRole('textbox', {name: 'Command'})
+	});
+	commandInput = commandPalette.getByRole('textbox', {name: 'Command'});
+	await expect(commandInput).toBeFocused();
+	await commandInput.fill('Find References');
+	await expect(
+		commandPalette.getByRole('option', {name: /Find References/})
+	).toBeVisible();
+	await page.keyboard.press('Shift+Tab');
+	await expect
+		.poll(() =>
+			commandPalette.evaluate(element =>
+				element.contains(element.ownerDocument.activeElement)
+			)
+		)
+		.toBe(true);
+	await page.keyboard.press('Tab');
+	await expect(commandInput).toBeFocused();
+	await commandInput.press('Enter');
+	let references = page.getByRole('dialog', {name: 'References to Next'});
+	await expect(references).toBeVisible();
+	await expect(
+		references.getByRole('heading', {name: 'References to Next'})
+	).toBeFocused();
+	const referencesBox = await references.boundingBox();
+	const viewport = page.viewportSize();
+	expect(referencesBox).not.toBeNull();
+	expect(viewport).not.toBeNull();
+	expect(referencesBox!.x).toBeGreaterThanOrEqual(0);
+	expect(referencesBox!.y).toBeGreaterThanOrEqual(0);
+	expect(referencesBox!.x + referencesBox!.width).toBeLessThanOrEqual(
+		viewport!.width
+	);
+	expect(referencesBox!.y + referencesBox!.height).toBeLessThanOrEqual(
+		viewport!.height
+	);
+	await page.keyboard.press('Escape');
+	await expect(references).toHaveCount(0);
+	await expect(editorContent).toBeFocused();
+	await runPaletteCommand(page, 'Find References');
+	references = page.getByRole('dialog', {name: 'References to Next'});
+	await expect(references).toBeVisible();
+	await expect(references.getByRole('heading', {name: 'Start'})).toHaveCount(2);
+	await expect(
+		references.getByText(
+			'Results cover standard Twine passage links. Format-specific references are not included unless an exact provider reports them.'
+		)
+	).toBeVisible();
+	await references
+		.getByRole('button', {name: 'Reveal in Source'})
+		.first()
+		.click();
+	await expect(references).toHaveCount(0);
+	await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
+	await expect(
+		page.getByRole('region', {name: 'Start', exact: true})
+	).toBeVisible();
+	await expect(page).toHaveURL(/offset=\d+&end=\d+/);
+
+	const definition = page
+		.getByRole('button')
+		.filter({hasText: 'Next'})
+		.filter({hasText: 'Go to Definition'});
+	await expect(definition).toHaveCount(1);
+	await definition.click();
+	await expect(
+		page.getByRole('region', {name: 'Next', exact: true})
+	).toBeVisible();
+});
+
+test('runs passage navigation and active reveal commands from the palette', async ({
+	page
+}) => {
+	await createProject(page, 'Contextual passage commands smoke');
+	await setPassageText(page, 'Open [[Next]].');
+	await selectPassage(page, 'Next');
+
+	await runPaletteCommand(page, 'Go to Passage');
+	const finder = page.locator('.story-edit-workspace > .fuzzy-finder');
+
+	await expect(finder).toBeVisible();
+	await finder.getByLabel('Search by passage name or text').fill('Start');
+	await finder
+		.locator('.fuzzy-finder-result')
+		.filter({has: page.getByText('Start', {exact: true})})
+		.click();
+	await expect(finder).toHaveCount(0);
+	await expect(
+		page.locator('.story-edit-graph-node[data-selected="true"]')
+	).toContainText('Start');
+
+	const workspaceMode = page.getByLabel('Workspace Mode');
+
+	await workspaceMode.getByRole('tab', {name: 'Text'}).click();
+	await expect(page.getByLabel('Story graph')).toHaveCount(0);
+	await runPaletteCommand(page, 'Reveal Active Passage in Graph');
+	await expect(
+		page.locator('.story-edit-graph-node[data-selected="true"]')
+	).toContainText('Start');
+
+	await workspaceMode.getByRole('tab', {name: 'Graph'}).click();
+	await expect(sourceEditor(page)).toHaveCount(0);
+	await runPaletteCommand(page, 'Reveal Active Passage in Source');
+	await expect(
+		page.getByRole('region', {name: 'Start', exact: true})
+	).toHaveClass(/is-active/);
+});
+
+test('reviews story-wide replacement, stale-retries, and applies compact exclusions atomically', async ({
+	page
+}) => {
+	await createProject(page, 'Reviewed project replacement smoke');
+	await setPassageText(page, 'alpha alpha');
+	await runPaletteCommand(page, 'Find / Replace');
+	const searchPanel = page.getByRole('region', {name: 'References'});
+	await expect(
+		searchPanel.getByRole('tab', {name: 'Find / Replace'})
+	).toHaveAttribute('aria-selected', 'true');
+	await searchPanel.getByRole('textbox', {name: 'Find'}).fill('alpha');
+	await searchPanel.getByRole('textbox', {name: 'Replace With'}).fill('beta');
+	await searchPanel.getByText('Include Passage Names', {exact: true}).click();
+	await searchPanel
+		.getByText('Include Story JavaScript', {exact: true})
+		.click();
+	await searchPanel
+		.getByText('Include Story Stylesheet', {exact: true})
+		.click();
+	await searchPanel
+		.getByRole('button', {name: 'Replace In Story Sources'})
+		.click();
+
+	const review = page.getByRole('dialog', {name: 'Review Project Replacement'});
+	await expect(review).toBeVisible();
+	await expect(review.getByText('2 changes')).toBeVisible();
+	await setPassageText(page, 'alpha alpha alpha');
+	await review.getByRole('button', {name: 'Apply Replacement'}).click();
+	await expect(review.getByRole('alert')).toContainText(
+		'stale-project-revision'
+	);
+	await review.getByRole('button', {name: 'Retry'}).click();
+	await expect(review.getByText('3 changes')).toBeVisible();
+	const changes = review.getByText('Include change', {exact: true});
+	await expect(changes).toHaveCount(3);
+	await changes.first().click();
+	await review.getByRole('button', {name: 'Apply Replacement'}).click();
+	await expect(review).toHaveCount(0);
+	await expect(sourceEditor(page)).toContainText('alpha beta beta');
+
+	await runPaletteCommand(page, 'Undo', /^Undo /);
+	await expect(sourceEditor(page)).toContainText('alpha alpha alpha');
+	await runPaletteCommand(page, 'Redo', /^Redo /);
+	await expect(sourceEditor(page)).toContainText('alpha beta beta');
 });
 
 test('keeps colliding passage IDs scoped to their projects', async ({page}) => {
@@ -716,6 +1069,8 @@ test('opens the D6 Contents, Diagnostics, and Assets surfaces', async ({
 		page,
 		'Set $score. Go to [[Missing]]. Portrait: <img src="assets/cover.png">'
 	);
+	await selectPassage(page, 'Missing');
+	await page.getByRole('button', {name: 'Delete', exact: true}).click();
 
 	await page.getByTitle('Contents').click();
 	await expect(page).toHaveURL(/#\/stories\/[^/]+\/contents$/);
@@ -739,6 +1094,74 @@ test('opens the D6 Contents, Diagnostics, and Assets surfaces', async ({
 		page.getByRole('button', {name: 'Recheck Project'})
 	).toBeVisible();
 	await expect(page.getByRole('button', {name: 'Fix All Safe'})).toBeVisible();
+	const brokenLinkDiagnostic = page
+		.locator('.diagnostics-route__row')
+		.filter({hasText: 'broken-link'})
+		.first();
+
+	await expect(brokenLinkDiagnostic).toBeVisible();
+	await brokenLinkDiagnostic.click();
+	await runPaletteCommand(page, 'Reveal in Source');
+	await expect(page).toHaveURL(/mode=text.*offset=\d+/);
+	await expect(
+		page.getByRole('region', {name: 'Start', exact: true})
+	).toHaveClass(/is-active/);
+
+	await page.getByTitle('Diagnostics').click();
+	await expect(brokenLinkDiagnostic).toBeVisible();
+	await brokenLinkDiagnostic.click();
+	await runPaletteCommand(page, 'Reveal in Graph');
+	await expect(page).toHaveURL(/mode=graph&source=passage/);
+	await expect(
+		page.locator('.story-edit-graph-node[data-selected="true"]')
+	).toContainText('Start');
+
+	await page.getByTitle('Diagnostics').click();
+	await expect(brokenLinkDiagnostic).toBeVisible();
+	await brokenLinkDiagnostic.click();
+	await runPaletteCommand(page, 'Create "Missing"');
+	let fixReview = page.getByRole('dialog', {
+		name: 'Review Diagnostic Fixes'
+	});
+	await expect(
+		fixReview.getByRole('heading', {name: 'Review Diagnostic Fixes'})
+	).toBeFocused();
+	const fixReviewBox = await fixReview.boundingBox();
+	const fixReviewViewport = page.viewportSize();
+	expect(fixReviewBox).not.toBeNull();
+	expect(fixReviewViewport).not.toBeNull();
+	expect(fixReviewBox!.x).toBeGreaterThanOrEqual(0);
+	expect(fixReviewBox!.y).toBeGreaterThanOrEqual(0);
+	expect(fixReviewBox!.x + fixReviewBox!.width).toBeLessThanOrEqual(
+		fixReviewViewport!.width
+	);
+	expect(fixReviewBox!.y + fixReviewBox!.height).toBeLessThanOrEqual(
+		fixReviewViewport!.height
+	);
+	await expect(fixReview.getByText('1 changes', {exact: true})).toBeVisible();
+	await expect(fixReview.getByText('Add passage')).toBeVisible();
+	await expect(fixReview.getByText('Missing', {exact: true})).toBeVisible();
+	await fixReview.getByRole('button', {name: 'Cancel'}).click();
+	await expect(fixReview).toHaveCount(0);
+	await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
+
+	await runPaletteCommand(page, 'Fix All Safe');
+	fixReview = page.getByRole('dialog', {
+		name: 'Review Diagnostic Fixes'
+	});
+	await expect(
+		fixReview.getByRole('heading', {name: 'Review Diagnostic Fixes'})
+	).toBeFocused();
+	await expect(fixReview.getByText('1 changes', {exact: true})).toBeVisible();
+	await expect(fixReview.getByText('Add passage')).toBeVisible();
+	await expect(fixReview.getByText('Missing', {exact: true})).toBeVisible();
+	await fixReview.getByRole('button', {name: 'Apply Fixes'}).click();
+	await expect(fixReview).toHaveCount(0);
+	await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
+	await expect(page.getByText('broken-link')).toHaveCount(0);
+
+	await page.getByTitle('Contents').click();
+	await expect(page.getByText('Missing', {exact: true}).first()).toBeVisible();
 
 	await page.getByTitle('Assets').click();
 	await expect(page).toHaveURL(/#\/stories\/[^/]+\/assets$/);

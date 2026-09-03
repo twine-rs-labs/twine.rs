@@ -1,5 +1,9 @@
 import {act, fireEvent, render, screen} from '@testing-library/react';
 import * as React from 'react';
+import {
+	SourceEditor,
+	type SourceEditorHandle
+} from '../../../../components/control/source-editor';
 import type {NativeEditorHost} from '../../native-editor/types';
 import {HarloweToolbar, wrapNativeEditorSelections} from '../harlowe-toolbar';
 import {
@@ -34,6 +38,80 @@ function editor(
 }
 
 describe('Harlowe native toolbar selection transforms', () => {
+	it('cannot mutate a closed live editor and resumes normal onChange after admission reopens', async () => {
+		jest.useFakeTimers();
+		let handle: SourceEditorHandle | undefined;
+		const onChange = jest.fn();
+		const controller = {
+			clearFind: jest.fn(),
+			find: jest.fn(),
+			findNext: jest.fn(),
+			getFindResult: () => ({count: 0, index: -1}),
+			proofreading: false,
+			replaceAll: jest.fn(),
+			replaceCurrent: jest.fn(),
+			requestPanel: jest.fn(),
+			setProofreading: jest.fn(),
+			subscribe: () => () => {},
+			takeRequestedPanel: jest.fn()
+		};
+		function Harness() {
+			const [editor, setEditor] = React.useState<SourceEditorHandle>();
+			const setEditorRef = React.useCallback(
+				(instance: SourceEditorHandle | null) => {
+					handle = instance ?? undefined;
+					setEditor(current =>
+						current === (instance ?? undefined)
+							? current
+							: (instance ?? undefined)
+					);
+				},
+				[]
+			);
+			return (
+				<>
+					<SourceEditor
+						id="harlowe-admission"
+						label="Harlowe admission"
+						onChange={onChange}
+						ref={setEditorRef}
+						value="text"
+					/>
+					{editor && (
+						<HarloweToolbar
+							controller={controller}
+							editor={editor}
+							onChangePreferences={jest.fn()}
+							preferences={{
+								codeUsesCodeFont: true,
+								codingTooltips: true,
+								completionsForKeywords: true,
+								completionsForMacros: true
+							}}
+						/>
+					)}
+				</>
+			);
+		}
+		render(<Harness />);
+		await act(async () => {
+			await Promise.resolve();
+		});
+		act(() => handle!.setSelections([{anchor: 0, head: 4}]));
+		act(() => handle!.setInputAdmission!(false));
+		fireEvent.click(screen.getByRole('button', {name: 'Styles'}));
+		fireEvent.click(screen.getByRole('button', {name: 'Bold [Ctrl+B]'}));
+		act(() => jest.runOnlyPendingTimers());
+		expect(handle!.getSnapshot().document).toBe('text');
+		expect(onChange).not.toHaveBeenCalled();
+		act(() => handle!.setInputAdmission!(true));
+		fireEvent.click(screen.getByRole('button', {name: 'Styles'}));
+		fireEvent.click(screen.getByRole('button', {name: 'Bold [Ctrl+B]'}));
+		act(() => jest.runOnlyPendingTimers());
+		expect(handle!.getSnapshot().document).toBe("''text''");
+		expect(onChange).toHaveBeenCalledWith("''text''");
+		jest.useRealTimers();
+	});
 	it('wraps all selections atomically and preserves direction/main selection', () => {
 		const {applyEdits, focus, host} = editor('one two three', [
 			{anchor: 3, head: 0},

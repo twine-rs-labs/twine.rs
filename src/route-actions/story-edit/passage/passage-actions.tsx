@@ -1,6 +1,5 @@
 import * as React from 'react';
 import {RenamePassageButton} from '../../../components/passage/rename-passage-button';
-import {renamePassageCommand, useCoreProjectHost} from '../../../core';
 import {Passage, Story} from '../../../store/stories';
 import {Point} from '../../../util/geometry';
 import {CreatePassageButton} from './create-passage-button';
@@ -16,6 +15,11 @@ export interface PassageActionsProps {
 	getCenter: () => Point;
 	onEditPassages: (passages: Passage[]) => void;
 	onOpenFuzzyFinder: () => void;
+	onRenamePassage: (
+		name: string,
+		passage: Passage,
+		restoreFocus: () => void
+	) => void;
 	onTestPassage?: (passage: Passage) => void;
 	story: Story;
 	testPassagePending?: boolean;
@@ -27,12 +31,13 @@ export const PassageActions: React.FC<PassageActionsProps> = props => {
 		getCenter,
 		onEditPassages,
 		onOpenFuzzyFinder,
+		onRenamePassage,
 		onTestPassage,
 		story,
 		testPassagePending,
 		testPassagePendingId
 	} = props;
-	const coreProjectHost = useCoreProjectHost();
+	const renameTriggerRef = React.useRef<HTMLSpanElement>(null);
 	const selectedPassages = React.useMemo(
 		() => story.passages.filter(passage => passage.selected),
 		[story.passages]
@@ -41,16 +46,11 @@ export const PassageActions: React.FC<PassageActionsProps> = props => {
 		() => (selectedPassages.length === 1 ? selectedPassages[0] : undefined),
 		[selectedPassages]
 	);
-
-	function handleRename(name: string, passage?: Passage) {
-		if (!passage) {
-			throw new Error('Passage is unset');
-		}
-
-		coreProjectHost.applyStoryCommand(
-			renamePassageCommand(story.id, passage.id, name, true)
+	const restoreRenameFocus = React.useCallback(() => {
+		window.requestAnimationFrame(() =>
+			renameTriggerRef.current?.querySelector('button')?.focus()
 		);
-	}
+	}, []);
 
 	return (
 		<div className="route-action-group">
@@ -60,11 +60,16 @@ export const PassageActions: React.FC<PassageActionsProps> = props => {
 				passages={selectedPassages}
 				story={story}
 			/>
-			<RenamePassageButton
-				onRename={name => handleRename(name, soloSelectedPassage)}
-				passage={soloSelectedPassage}
-				story={story}
-			/>
+			<span ref={renameTriggerRef}>
+				<RenamePassageButton
+					onRename={name => {
+						if (!soloSelectedPassage) throw new Error('Passage is unset');
+						onRenamePassage(name, soloSelectedPassage, restoreRenameFocus);
+					}}
+					passage={soloSelectedPassage}
+					story={story}
+				/>
+			</span>
 			<DeletePassagesButton passages={selectedPassages} story={story} />
 			<TestPassageButton
 				onTestPassage={onTestPassage}

@@ -4,7 +4,7 @@ import {MemoryRouter} from 'react-router';
 import type {
 	CoreProjectHost,
 	CoreProjectPatchListener
-} from '../../../core/project-host';
+} from '../../../test-util/core-project-host-runtime';
 import {projectSnapshotFromStories} from '../../../core';
 import {
 	fakeLoadedStoryFormat,
@@ -157,10 +157,37 @@ describe('story workbench panels', () => {
 		expect(highlightPassages).toHaveBeenCalledTimes(settledCallCount);
 	});
 
-	it('routes replace-all through the bound project host', async () => {
+	it('plans replacement through the bound project host instead of dispatching a direct command', async () => {
 		const story = fakeStory();
+		const summary = {
+			affectedEntityCount: 1,
+			changeCount: 1,
+			coverage: 'complete',
+			firstDetailCursor: {planDigest: 'digest', planId: 'plan', position: 0},
+			operationKind: 'project-replace',
+			planDigest: 'digest',
+			planId: 'plan',
+			projectRevision: 4,
+			selectionCapabilities: {
+				all: true,
+				exclusions: true,
+				groups: true,
+				only: false
+			},
+			validationFailures: []
+		};
 		const host = {
-			applyStoryCommand: jest.fn(() => Promise.resolve()),
+			applyRefactorPlan: jest.fn(() => Promise.resolve({type: 'applied'})),
+			closeRefactorReview: jest.fn(),
+			planProjectReplace: jest.fn(() =>
+				Promise.resolve({type: 'complete', summary})
+			),
+			queryRefactorPlanDetailAsync: jest.fn(() =>
+				Promise.resolve({
+					type: 'page',
+					page: {changes: [], nextCursor: null}
+				})
+			),
 			subscribeToPatches: jest.fn(() => jest.fn()),
 			querySearchPageAsync: jest.fn(() =>
 				Promise.resolve({
@@ -201,18 +228,46 @@ describe('story workbench panels', () => {
 				screen.getByRole('button', {name: 'dialogs.storySearch.replaceAll'})
 			).toBeEnabled()
 		);
-		const queryCount = (host.querySearchPageAsync as jest.Mock).mock.calls
-			.length;
+		const queryCount = (host.querySearchPageAsync as unknown as jest.Mock).mock
+			.calls.length;
 		fireEvent.click(
 			screen.getByRole('button', {name: 'dialogs.storySearch.replaceAll'})
 		);
 
-		expect(host.applyStoryCommand).toHaveBeenCalledWith(
-			expect.objectContaining({story_id: story.id, type: 'replaceAllText'}),
-			'undoChange.replaceAllText'
+		await waitFor(() =>
+			expect(host.planProjectReplace).toHaveBeenCalledWith(
+				story.id,
+				expect.objectContaining({
+					includePassageNames: true,
+					includePassageText: true,
+					includeScript: true,
+					includeStylesheet: true,
+					query: 'needle',
+					replacement: 'replacement'
+				}),
+				expect.any(Object)
+			)
+		);
+		expect('applyStoryCommand' in host).toBe(false);
+		await waitFor(() =>
+			expect(host.queryRefactorPlanDetailAsync).toHaveBeenCalled()
+		);
+		fireEvent.click(
+			screen.getByRole('button', {
+				name: 'components.projectReplaceReview.apply'
+			})
 		);
 		await waitFor(() =>
-			expect(host.querySearchPageAsync).toHaveBeenCalledTimes(queryCount + 1)
+			expect(host.applyRefactorPlan).toHaveBeenCalledWith(story.id, {
+				expectedProjectRevision: 4,
+				planId: 'plan',
+				selection: {type: 'all'}
+			})
+		);
+		await waitFor(() =>
+			expect(
+				(host.querySearchPageAsync as unknown as jest.Mock).mock.calls.length
+			).toBeGreaterThan(queryCount)
 		);
 	});
 

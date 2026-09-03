@@ -33,7 +33,14 @@ import {
 	SegmentedControl,
 	TablerIcon
 } from '../design-system';
-import {AppCommand} from './command-registry';
+import {
+	AppCommand,
+	AppCommandContribution,
+	commandIdSegment,
+	commandIsDisabled,
+	composeAppCommands,
+	validateCommandContribution
+} from './command-registry';
 import {
 	AppShellContext,
 	ShellDockRegistration,
@@ -41,7 +48,12 @@ import {
 } from './app-shell-context';
 import {CommandPalette} from './command-palette';
 import {
+	commandPaletteKeybinding,
 	commandIdForKeyboardEvent,
+	dialogTarget,
+	editableTarget,
+	keybindingForCommand,
+	matchesKeyboardShortcut,
 	shortcutLabel,
 	ShortcutCommandId
 } from './keyboard-shortcuts';
@@ -198,6 +210,11 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 	const {materializeStory, publishStory} = usePublishing();
 	const {playStory, proofStory, testStory} = useStoryLaunch();
 	const [paletteOpen, setPaletteOpen] = React.useState(false);
+	const [commandContributionVersion, setCommandContributionVersion] =
+		React.useState(0);
+	const commandContributions = React.useRef(
+		new Map<symbol, AppCommandContribution & {fingerprint: string}>()
+	);
 	const [drawerOpen, setDrawerOpen] = React.useState(false);
 	const [toolbar, setToolbar] = React.useState<ShellToolbarRegistration>();
 	const [dock, setDock] = React.useState<ShellDockRegistration>();
@@ -249,9 +266,10 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 		[currentStory]
 	);
 	const mode = routeMode(pathname);
-	const routeTabs = React.useMemo(
-		() => Object.keys(toolbar?.tabs ?? {}),
-		[toolbar]
+	const routeTabs = React.useMemo(() => toolbar?.tabs ?? [], [toolbar]);
+	const activeToolbarContent = React.useMemo(
+		() => routeTabs.find(tab => tab.id === activeToolbarTab)?.content,
+		[activeToolbarTab, routeTabs]
 	);
 	const dismissedDiagnosticIds = React.useMemo(
 		() =>
@@ -481,7 +499,9 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 			return;
 		}
 
-		setActiveToolbarTab(tab => (routeTabs.includes(tab) ? tab : routeTabs[0]));
+		setActiveToolbarTab(tab =>
+			routeTabs.some(candidate => candidate.id === tab) ? tab : routeTabs[0].id
+		);
 	}, [routeTabs]);
 
 	React.useEffect(() => {
@@ -554,24 +574,140 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 
 	React.useEffect(() => {
 		function handleKeyDown(event: KeyboardEvent) {
-			if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
-				event.preventDefault();
-				setPaletteOpen(open => !open);
-			}
+			if (
+				event.isComposing ||
+				!matchesKeyboardShortcut(event, commandPaletteKeybinding)
+			)
+				return;
+
+			if (
+				!paletteOpen &&
+				(dialogTarget(event.target) ||
+					document.querySelector('[aria-modal="true"]'))
+			)
+				return;
+
+			event.preventDefault();
+			setPaletteOpen(open => !open);
 		}
 
 		window.addEventListener('keydown', handleKeyDown);
 
 		return () => window.removeEventListener('keydown', handleKeyDown);
-	}, []);
+	}, [paletteOpen]);
+
+	const registerCommandContribution = React.useCallback(
+		(contribution: AppCommandContribution) => {
+			validateCommandContribution(contribution);
+			if (
+				Array.from(commandContributions.current.values()).some(
+					current => current.owner === contribution.owner
+				)
+			) {
+				throw new Error(
+					`Duplicate command contribution owner: ${contribution.owner}`
+				);
+			}
+			const token = Symbol(contribution.owner);
+			const fingerprint = JSON.stringify(
+				contribution.commands.map(
+					({
+						contextKey,
+						disabled,
+						disabledReason,
+						group,
+						icon,
+						id,
+						keybinding,
+						keywords,
+						label,
+						order,
+						priority,
+						shortcut
+					}) => ({
+						contextKey,
+						disabled,
+						disabledReason,
+						group,
+						icon,
+						id,
+						keybinding,
+						keywords,
+						label,
+						order,
+						priority,
+						shortcut
+					})
+				)
+			);
+			commandContributions.current.set(token, {...contribution, fingerprint});
+			setCommandContributionVersion(version => version + 1);
+			let active = true;
+			return {
+				refresh: (commands: AppCommand[]) => {
+					if (!active) return;
+					validateCommandContribution({commands, owner: contribution.owner});
+					const current = commandContributions.current.get(token);
+					const nextFingerprint = JSON.stringify(
+						commands.map(
+							({
+								contextKey,
+								disabled,
+								disabledReason,
+								group,
+								icon,
+								id,
+								keybinding,
+								keywords,
+								label,
+								order,
+								priority,
+								shortcut
+							}) => ({
+								contextKey,
+								disabled,
+								disabledReason,
+								group,
+								icon,
+								id,
+								keybinding,
+								keywords,
+								label,
+								order,
+								priority,
+								shortcut
+							})
+						)
+					);
+					commandContributions.current.set(token, {
+						commands,
+						fingerprint: nextFingerprint,
+						getCommands: contribution.getCommands,
+						owner: contribution.owner
+					});
+					if (current?.fingerprint !== nextFingerprint) {
+						setCommandContributionVersion(version => version + 1);
+					}
+				},
+				unregister: () => {
+					if (!active) return;
+					active = false;
+					commandContributions.current.delete(token);
+					setCommandContributionVersion(version => version + 1);
+				}
+			};
+		},
+		[]
+	);
 
 	const shellContext = React.useMemo(
 		() => ({
 			inShell: true,
+			registerCommandContribution,
 			setDock,
 			setToolbar
 		}),
-		[]
+		[registerCommandContribution]
 	);
 
 	const runBuildAction = React.useCallback(
@@ -648,6 +784,8 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 	);
 
 	const commands = React.useMemo<AppCommand[]>(() => {
+		const keybinding = (id: ShortcutCommandId) =>
+			keybindingForCommand(id, prefs.keybindingPreset);
 		const shortcut = (id: ShortcutCommandId) =>
 			shortcutLabel(id, prefs.keybindingPreset);
 		const allCommands: AppCommand[] = [
@@ -657,6 +795,7 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 				id: 'nav.library',
 				label: 'Story Library',
 				run: () => navigateAfterFlush('/'),
+				keybinding: keybinding('nav.library'),
 				shortcut: shortcut('nav.library')
 			},
 			{
@@ -672,6 +811,7 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 				id: 'nav.settings',
 				label: 'Settings',
 				run: () => navigateAfterFlush('/settings'),
+				keybinding: keybinding('nav.settings'),
 				shortcut: shortcut('nav.settings')
 			},
 			{
@@ -680,20 +820,24 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 				id: 'nav.new-project',
 				label: 'New Project',
 				run: () => navigateAfterFlush('/new-project'),
+				keybinding: keybinding('nav.new-project'),
 				shortcut: shortcut('nav.new-project')
 			},
 			{
 				disabled: !currentStory,
+				disabledReason: currentStory ? undefined : 'Open a story first',
 				group: 'Navigation',
 				icon: 'layout-columns',
 				id: 'nav.current-story',
 				label: currentStory ? `Edit ${currentStory.name}` : 'Edit Story',
 				run: () =>
 					currentStory && navigateAfterFlush(`/stories/${currentStory.id}`),
-				shortcut: shortcut('nav.current-story')
+				shortcut: shortcut('nav.current-story'),
+				keybinding: keybinding('nav.current-story')
 			},
 			{
 				disabled: !currentStory,
+				disabledReason: currentStory ? undefined : 'Open a story first',
 				group: 'Build',
 				icon: 'package-export',
 				id: 'build.screen',
@@ -701,10 +845,12 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 				run: () =>
 					currentStory &&
 					navigateAfterFlush(`/stories/${currentStory.id}/build`),
-				shortcut: shortcut('build.screen')
+				shortcut: shortcut('build.screen'),
+				keybinding: keybinding('build.screen')
 			},
 			{
 				disabled: !currentStory,
+				disabledReason: currentStory ? undefined : 'Open a story first',
 				group: 'Navigation',
 				icon: 'list-tree',
 				id: 'nav.contents',
@@ -718,6 +864,7 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 			},
 			{
 				disabled: !currentStory,
+				disabledReason: currentStory ? undefined : 'Open a story first',
 				group: 'Navigation',
 				icon: 'alert-triangle',
 				id: 'nav.diagnostics',
@@ -728,6 +875,7 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 			},
 			{
 				disabled: !currentStory,
+				disabledReason: currentStory ? undefined : 'Open a story first',
 				group: 'Navigation',
 				icon: 'photo',
 				id: 'nav.assets',
@@ -738,24 +886,29 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 			},
 			{
 				disabled: !currentStory,
+				disabledReason: currentStory ? undefined : 'Open a story first',
 				group: 'Build',
 				icon: 'tool',
 				id: 'build.test',
 				label: 'Test Story',
 				run: runTest,
-				shortcut: shortcut('build.test')
+				shortcut: shortcut('build.test'),
+				keybinding: keybinding('build.test')
 			},
 			{
 				disabled: !currentStory,
+				disabledReason: currentStory ? undefined : 'Open a story first',
 				group: 'Build',
 				icon: 'player-play',
 				id: 'build.play',
 				label: 'Play Story',
 				run: runPlay,
-				shortcut: shortcut('build.play')
+				shortcut: shortcut('build.play'),
+				keybinding: keybinding('build.play')
 			},
 			{
 				disabled: !currentStory,
+				disabledReason: currentStory ? undefined : 'Open a story first',
 				group: 'Build',
 				icon: 'eyeglass',
 				id: 'build.proof',
@@ -764,6 +917,7 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 			},
 			{
 				disabled: !currentStory,
+				disabledReason: currentStory ? undefined : 'Open a story first',
 				group: 'Build',
 				icon: 'file-text',
 				id: 'build.export-html',
@@ -772,6 +926,7 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 			},
 			{
 				disabled: !currentStory,
+				disabledReason: currentStory ? undefined : 'Open a story first',
 				group: 'Build',
 				icon: 'file-code',
 				id: 'build.export-twee',
@@ -780,22 +935,28 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 			},
 			...routeTabs.map(tab => ({
 				group: 'Toolbar' as const,
-				icon: tab === activeToolbarTab ? 'circle-check' : 'circle-dashed',
-				id: `toolbar.${tab}`,
-				label: `${tab} Actions`,
-				run: () => setActiveToolbarTab(tab)
+				icon: tab.id === activeToolbarTab ? 'circle-check' : 'circle-dashed',
+				id: `toolbar.${tab.id}`,
+				label: `${tab.label} Actions`,
+				run: () => setActiveToolbarTab(tab.id)
 			})),
 			...stories.map(story => ({
 				group: 'Story' as const,
 				icon: story.id === currentStory?.id ? 'circle-check' : 'file-text',
-				id: `story.${story.id}`,
+				id: `story.${commandIdSegment(story.id)}`,
 				keywords: [story.name],
 				label: story.name,
 				run: () => navigateAfterFlush(`/stories/${story.id}`)
 			}))
 		];
 
-		return allCommands;
+		return composeAppCommands(
+			allCommands,
+			Array.from(commandContributions.current.values(), contribution => ({
+				commands: contribution.getCommands?.() ?? contribution.commands,
+				owner: contribution.owner
+			}))
+		);
 	}, [
 		activeToolbarTab,
 		currentStory,
@@ -807,23 +968,54 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 		runPlay,
 		runProof,
 		runTest,
-		stories
+		stories,
+		commandContributionVersion
 	]);
+	const commandsRef = React.useRef(commands);
+	commandsRef.current = commands;
+	const resolveCurrentCommand = React.useCallback((id: string) => {
+		for (const contribution of commandContributions.current.values()) {
+			const command = (
+				contribution.getCommands?.() ?? contribution.commands
+			).find(candidate => candidate.id === id);
+			if (command) return command;
+		}
+		return commandsRef.current.find(command => command.id === id);
+	}, []);
 
 	React.useEffect(() => {
 		function handleKeyDown(event: KeyboardEvent) {
+			if (
+				paletteOpen ||
+				document.querySelector('[aria-modal="true"]') ||
+				dialogTarget(event.target) ||
+				event.isComposing ||
+				editableTarget(event.target)
+			)
+				return;
+			const rendered = commandsRef.current.find(
+				command =>
+					command.keybinding &&
+					matchesKeyboardShortcut(event, command.keybinding)
+			);
 			const commandId = commandIdForKeyboardEvent(
 				event,
 				prefs.keybindingPreset
 			);
 
-			if (!commandId) {
+			if (!rendered && !commandId) {
 				return;
 			}
 
-			const command = commands.find(command => command.id === commandId);
+			const command = resolveCurrentCommand(rendered?.id ?? commandId!);
 
-			if (!command || command.disabled) {
+			if (
+				!command ||
+				commandIsDisabled(command) ||
+				(rendered && command.contextKey !== rendered.contextKey) ||
+				!command.keybinding ||
+				!matchesKeyboardShortcut(event, command.keybinding)
+			) {
 				return;
 			}
 
@@ -834,7 +1026,7 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 		window.addEventListener('keydown', handleKeyDown);
 
 		return () => window.removeEventListener('keydown', handleKeyDown);
-	}, [commands, prefs.keybindingPreset]);
+	}, [paletteOpen, prefs.keybindingPreset, resolveCurrentCommand]);
 
 	const buildBadgeTone =
 		buildState.kind === 'error'
@@ -995,10 +1187,18 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 						<div className="app-shell__route-tabs">
 							{routeTabs.length > 0 && (
 								<SegmentedControl
-									onChange={setActiveToolbarTab}
-									options={routeTabs}
+									onChange={label => {
+										const tab = routeTabs.find(
+											candidate => candidate.label === label
+										);
+										if (tab) setActiveToolbarTab(tab.id);
+									}}
+									options={routeTabs.map(tab => tab.label)}
 									size="sm"
-									value={activeToolbarTab}
+									value={
+										routeTabs.find(tab => tab.id === activeToolbarTab)?.label ??
+										''
+									}
 								/>
 							)}
 						</div>
@@ -1025,7 +1225,9 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 					{toolbar && activeToolbarTab && (
 						<div className="app-shell__actions">
 							<div className="app-shell__actions-scroll">
-								{toolbar.tabs[activeToolbarTab]}
+								<React.Fragment key={activeToolbarTab}>
+									{activeToolbarContent}
+								</React.Fragment>
 							</div>
 						</div>
 					)}
@@ -1297,6 +1499,7 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 				</footer>
 				<CommandPalette
 					commands={commands}
+					resolveCommand={resolveCurrentCommand}
 					onClose={() => setPaletteOpen(false)}
 					open={paletteOpen}
 				/>

@@ -1,0 +1,87 @@
+.passage-rename-review__layer {
+	align-items: flex-start;
+	display: flex;
+	inset: 0;
+	justify-content: flex-end;
+	padding: var(--sp-4);
+	pointer-events: none;
+	position: fixed;
+	z-index: 1000;
+}
+.passage-rename-review {
+	background: var(--ink-4);
+	border: 1px solid var(--line-2);
+	border-radius: var(--r-md);
+	box-shadow: var(--shadow-modal);
+	color: var(--tx-1);
+	display: flex;
+	flex-direction: column;
+	max-height: calc(100vh - 2 * var(--sp-4));
+	max-width: min(560px, calc(100vw - 2 * var(--sp-4)));
+	pointer-events: auto;
+	width: 560px;
+}
+.passage-rename-review__header,
+.passage-rename-review__actions,
+.passage-rename-review__paging,
+.passage-rename-review__summary {
+	align-items: center;
+	display: flex;
+	gap: var(--sp-2);
+}
+.passage-rename-review__header {
+	border-bottom: 1px solid var(--line-2);
+	justify-content: space-between;
+	padding: var(--sp-3);
+}
+.passage-rename-review__header h2 {
+	margin: 0;
+}
+.passage-rename-review__content {
+	overflow: auto;
+	padding: var(--sp-3);
+}
+.passage-rename-review__actions {
+	border-top: 1px solid var(--line-2);
+	justify-content: flex-end;
+	padding: var(--sp-3);
+}
+.passage-rename-review__warning,
+.passage-rename-review__error {
+	border-left: 3px solid var(--acc-yellow, #c78b00);
+	padding-left: var(--sp-2);
+}
+.passage-rename-review__error {
+	border-color: var(--acc-red, #d33);
+}
+.passage-rename-review__group {
+	border-top: 1px solid var(--line-2);
+	margin-top: var(--sp-3);
+	padding-top: var(--sp-2);
+}
+.passage-rename-review__change {
+	background: var(--ink-3);
+	border-radius: var(--r-sm);
+	margin: var(--sp-2) 0;
+	padding: var(--sp-2);
+}
+.passage-rename-review__change p {
+	margin-top: 0;
+}
+.passage-rename-review__change dl {
+	display: grid;
+	gap: var(--sp-1) var(--sp-2);
+	grid-template-columns: max-content 1fr;
+	margin-bottom: 0;
+}
+.passage-rename-review__change dt {
+	color: var(--tx-2);
+}
+.passage-rename-review__change dd {
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+.passage-rename-review__paging {
+	justify-content: space-between;
+	margin-top: var(--sp-3);
+}

@@ -10,7 +10,7 @@ import * as React from 'react';
 import {
 	CoreProjectHostProvider,
 	StoreCoreProjectHost
-} from '../../../core/project-host';
+} from '../../../test-util/core-project-host-runtime';
 import type {PatchBatch} from '../../../core/bindings/PatchBatch';
 import {defaults as prefsDefaults} from '../../../store/prefs/defaults';
 import {PrefsContext, PrefsState} from '../../../store/prefs';

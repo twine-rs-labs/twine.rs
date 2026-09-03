@@ -1,36 +1,36 @@
-# Finding and Replacing Text
+# Finding and Replacing Story Sources
 
-Searching for and replacing passage text is done through the _Find and Replace_
-dialog, which you can open by choosing _Find and Replace_ from the _Story_ top
-toolbar tab.
+Open _Find and Replace_ from the _Story_ toolbar tab. Enter text in the _Find_
+field to see bounded previews and highlight matching passage cards. Select a
+result to reveal its source.
 
-When you enter text into the _Find_ text field, Twine will highlight the cards
-of passages containing that text. You'll also see a numeric count of matching
-passages in the corner of the Find and Replace dialog.
+The source checkboxes independently include passage names, passage text, Story
+JavaScript, and the Story Stylesheet. _Match Case_ makes matching
+case-sensitive.
 
-To replace text you're searching for, enter the replacement in the _Replace_
-field and select _Replace In All Passages_.
+## Reviewing replacements
 
-## Focusing Searches
+Enter replacement text and choose _Replace In Story Sources_. Twine constructs
+a complete, revision-bound plan in the project session before showing the
+review. The review reports the complete change count and pages the individual
+before/after details, so a large replacement is not limited to the visible
+search previews.
 
-The _Include Passage Names_ checkbox controls both whether text matches are
-highlighted for passage names, and whether text replacements are done in passage
-names.
+Individual text changes may be unchecked. Passage-name changes and their
+detected standard Twine-link rewrites are required groups and cannot be split.
+Format-specific or unknown link syntax is not rewritten speculatively.
 
-The _Match Case_ checkbox controls whether text matches are case-sensitive. When
-it's on, text must be the exact case of what you enter in the _Find_ field for
-it to be considered a match.
+Editing remains available while review is open. If any project source changes
+after planning, Apply fails as stale without changing the project. Choose
+_Retry_ to build a fresh plan. A successful Apply is one project transaction,
+so Undo and Redo restore every selected source together.
 
-The _Use Regular Expressions_ checkbox controls whether Twine uses the
-JavaScript regular expression parser to both find and replace text. Regular
-expressions are a way to specify text patterns. For example, the regular
-expression `.and` matches both 'hand' and 'band'.
+## Regular expressions
 
-Regular expressions have a detailed syntax all their own. [Mozilla Developer
-Network](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_Expressions)
-has a good introduction to the topic.
+_Use Regular Expressions_ treats the Find value as a regular-expression
+pattern. Capture references such as `$1` may then be used in the replacement.
+For example, finding `(.)and` and replacing it with `$1---` changes `Sand band`
+to `S--- b---`.
 
-If you use regular expressions in your search, the _Replace_ field can also
-contain backreferences. For example, if you enter `(.)and` in the _Find_ field
-and `$1---` in the _Replace_ field, the text `Sand band` will be replaced to
-`S--- b---`.
+When regular expressions are off, both Find and Replace values are literal;
+`$1` and `$$` remain ordinary text.

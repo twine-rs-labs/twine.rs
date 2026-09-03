@@ -87,6 +87,7 @@ test('writes deterministic assets and manifest metadata', async () => {
 			assets: ['assets/perf/pixel.svg', 'assets/perf/readme.txt'],
 			fixtureVariant: 'chapbook',
 			passageCount: 3,
+			performanceFixtureMeasurementContractVersion: 4,
 			projectPath: 'project',
 			sourcePath: 'source'
 		});

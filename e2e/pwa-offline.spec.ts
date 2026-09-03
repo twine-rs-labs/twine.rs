@@ -109,6 +109,7 @@ test('a fresh install can create and test a project offline', async ({
 	context,
 	page
 }) => {
+	test.setTimeout(90_000);
 	const failedAppRequests: string[] = [];
 	const storyFormatCallbackRequests: string[] = [];
 	const appOrigin = new URL(appUrl).origin;
@@ -157,13 +158,225 @@ test('a fresh install can create and test a project offline', async ({
 
 	const marker = 'Fresh-install offline story format loaded.';
 
-	await setPassageText(page, marker);
+	await setPassageText(page, `${marker} [[Next]] [[Again->Next]].`);
+	const nextPassage = page
+		.getByRole('listitem')
+		.filter({has: page.getByText('Next', {exact: true})})
+		.getByRole('button');
+	await expect(nextPassage).toBeVisible();
+	await nextPassage.click();
+	await page.getByRole('button', {name: 'Command'}).click();
+	let referenceCommandInput = page.getByRole('textbox', {name: 'Command'});
+	await expect(referenceCommandInput).toBeFocused();
+	await referenceCommandInput.fill('Find References');
+	await expect(
+		page.getByRole('option', {name: /Find References/})
+	).toHaveAttribute('aria-selected', 'true');
+	await referenceCommandInput.press('Enter');
+	let references = page.getByRole('dialog', {name: 'References to Next'});
+	await expect(
+		references.getByRole('heading', {name: 'References to Next'})
+	).toBeFocused();
+	const referencesBox = await references.boundingBox();
+	const referencesViewport = page.viewportSize();
+	expect(referencesBox).not.toBeNull();
+	expect(referencesViewport).not.toBeNull();
+	expect(referencesBox!.x + referencesBox!.width).toBeLessThanOrEqual(
+		referencesViewport!.width
+	);
+	expect(referencesBox!.y + referencesBox!.height).toBeLessThanOrEqual(
+		referencesViewport!.height
+	);
+	await expect(references.getByRole('heading', {name: 'Start'})).toHaveCount(2);
+	await page.keyboard.press('Escape');
+	await expect(references).toHaveCount(0);
+	await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
+	await page.getByRole('button', {name: 'Command'}).click();
+	referenceCommandInput = page.getByRole('textbox', {name: 'Command'});
+	await expect(referenceCommandInput).toBeFocused();
+	await referenceCommandInput.fill('Find References');
+	await expect(
+		page.getByRole('option', {name: /Find References/})
+	).toHaveAttribute('aria-selected', 'true');
+	await referenceCommandInput.press('Enter');
+	references = page.getByRole('dialog', {name: 'References to Next'});
+	await expect(references.getByRole('heading', {name: 'Start'})).toHaveCount(2);
+	await references
+		.getByRole('button', {name: 'Reveal in Source'})
+		.first()
+		.click();
+	await expect(references).toHaveCount(0);
+	await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
+	await expect(
+		page.getByRole('region', {name: 'Start', exact: true})
+	).toBeVisible();
+	await expect(page).toHaveURL(/offset=\d+&end=\d+/);
+	await page
+		.getByRole('listitem')
+		.filter({has: page.getByText('Start', {exact: true})})
+		.getByRole('button')
+		.click();
+	await page.getByRole('tab', {name: 'Story', exact: true}).click();
+	await page.getByRole('button', {name: 'Command'}).click();
+	const renameCommandInput = page.getByRole('textbox', {name: 'Command'});
+	await expect(renameCommandInput).toBeFocused();
+	await renameCommandInput.fill('Rename Active Passage');
+	await expect(
+		page.getByRole('option', {name: /Rename Active Passage/})
+	).toHaveAttribute('aria-selected', 'true');
+	await renameCommandInput.press('Enter');
+	const renamePrompt = page.getByRole('dialog', {
+		name: 'What should “Start” be renamed to?'
+	});
+	await expect(renamePrompt.getByRole('textbox')).toBeFocused();
+	const renamePromptBox = await renamePrompt.boundingBox();
+	const renameViewport = page.viewportSize();
+	expect(renamePromptBox).not.toBeNull();
+	expect(renameViewport).not.toBeNull();
+	expect(
+		Math.abs(
+			renamePromptBox!.x +
+				renamePromptBox!.width / 2 -
+				renameViewport!.width / 2
+		)
+	).toBeLessThan(2);
+	await renamePrompt.getByRole('button', {name: 'Cancel'}).click();
+	await expect(renamePrompt).toHaveCount(0);
+	await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
+	await expect(
+		page.getByRole('region', {name: 'Start', exact: true})
+	).toBeVisible();
+	await page.getByRole('button', {name: 'Command'}).click();
+	const applyRenameCommandInput = page.getByRole('textbox', {name: 'Command'});
+	await expect(applyRenameCommandInput).toBeFocused();
+	await applyRenameCommandInput.fill('Rename Active Passage');
+	await expect(
+		page.getByRole('option', {name: /Rename Active Passage/})
+	).toHaveAttribute('aria-selected', 'true');
+	await applyRenameCommandInput.press('Enter');
+	const applyRenamePrompt = page.getByRole('dialog', {
+		name: 'What should “Start” be renamed to?'
+	});
+	await applyRenamePrompt.getByRole('textbox').fill('Offline Start');
+	await applyRenamePrompt.getByRole('button', {name: 'Save'}).click();
+	const renameReview = page.getByRole('dialog', {
+		name: 'Review Passage Rename'
+	});
+	await expect(
+		renameReview.getByRole('heading', {name: 'Review Passage Rename'})
+	).toBeFocused();
+	await expect(renameReview.getByText('Rename passage')).toBeVisible();
+	await renameReview.getByRole('button', {name: 'Apply Rename'}).click();
+	await expect(renameReview).toHaveCount(0);
+	await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
+	await expect(
+		page.getByRole('region', {name: 'Offline Start', exact: true})
+	).toBeVisible();
+	await page.getByRole('tab', {name: 'Story', exact: true}).click();
+	await page.getByLabel('Find and Replace', {exact: true}).click();
+	const searchPanel = page.getByRole('region', {name: 'References'});
+	await searchPanel.getByRole('textbox', {name: 'Find'}).fill('Fresh-install');
+	await searchPanel
+		.getByRole('textbox', {name: 'Replace With'})
+		.fill('Offline-reviewed');
+	await searchPanel.getByText('Include Passage Names', {exact: true}).click();
+	await searchPanel
+		.getByText('Include Story JavaScript', {exact: true})
+		.click();
+	await searchPanel
+		.getByText('Include Story Stylesheet', {exact: true})
+		.click();
+	await searchPanel
+		.getByRole('button', {name: 'Replace In Story Sources'})
+		.click();
+	const replaceReview = page.getByRole('dialog', {
+		name: 'Review Project Replacement'
+	});
+	await expect(replaceReview.getByText('1 change')).toBeVisible();
+	await replaceReview.getByRole('button', {name: 'Apply Replacement'}).click();
+	await expect(replaceReview).toHaveCount(0);
+	const replacedMarker = marker.replace('Fresh-install', 'Offline-reviewed');
+	await setPassageText(
+		page,
+		`${replacedMarker} [[Next]] [[Again->Next]] [[Offline Missing]].`
+	);
+	const offlineMissing = page
+		.getByRole('listitem')
+		.filter({has: page.getByText('Offline Missing', {exact: true})})
+		.getByRole('button');
+	await expect(offlineMissing).toBeVisible();
+	await offlineMissing.click();
+	await page.getByRole('tab', {name: 'Story', exact: true}).click();
+	await page.keyboard.press('Delete');
+	await expect(offlineMissing).toBeVisible();
+	await page.getByRole('tab', {name: 'Passage', exact: true}).click();
+	await page.keyboard.press('Delete');
+	await expect(offlineMissing).toHaveCount(0);
+	await page.getByTitle('Diagnostics').click();
+	await expect(page.getByText('broken-link').first()).toBeVisible();
+	await page.getByRole('button', {name: 'Command'}).click();
+	let diagnosticCommandInput = page.getByRole('textbox', {name: 'Command'});
+	await expect(diagnosticCommandInput).toBeFocused();
+	await diagnosticCommandInput.fill('Fix All Safe');
+	await expect(
+		page.getByRole('option', {name: /Fix All Safe/})
+	).toHaveAttribute('aria-selected', 'true');
+	await diagnosticCommandInput.press('Enter');
+	let diagnosticFixReview = page.getByRole('dialog', {
+		name: 'Review Diagnostic Fixes'
+	});
+	await expect(
+		diagnosticFixReview.getByRole('heading', {
+			name: 'Review Diagnostic Fixes'
+		})
+	).toBeFocused();
+	const diagnosticReviewBox = await diagnosticFixReview.boundingBox();
+	const diagnosticViewport = page.viewportSize();
+	expect(diagnosticReviewBox).not.toBeNull();
+	expect(diagnosticViewport).not.toBeNull();
+	expect(
+		diagnosticReviewBox!.x + diagnosticReviewBox!.width
+	).toBeLessThanOrEqual(diagnosticViewport!.width);
+	expect(
+		diagnosticReviewBox!.y + diagnosticReviewBox!.height
+	).toBeLessThanOrEqual(diagnosticViewport!.height);
+	await diagnosticFixReview.getByRole('button', {name: 'Cancel'}).click();
+	await expect(diagnosticFixReview).toHaveCount(0);
+	await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
+	await page.getByRole('button', {name: 'Command'}).click();
+	diagnosticCommandInput = page.getByRole('textbox', {name: 'Command'});
+	await expect(diagnosticCommandInput).toBeFocused();
+	await diagnosticCommandInput.fill('Fix All Safe');
+	await expect(
+		page.getByRole('option', {name: /Fix All Safe/})
+	).toHaveAttribute('aria-selected', 'true');
+	await diagnosticCommandInput.press('Enter');
+	diagnosticFixReview = page.getByRole('dialog', {
+		name: 'Review Diagnostic Fixes'
+	});
+	await expect(diagnosticFixReview.getByText('Add passage')).toBeVisible();
+	await expect(
+		diagnosticFixReview.getByText('Offline Missing', {exact: true})
+	).toBeVisible();
+	await diagnosticFixReview.getByRole('button', {name: 'Apply Fixes'}).click();
+	await expect(diagnosticFixReview).toHaveCount(0);
+	await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
+	await page.getByTitle('Contents').click();
+	await expect(
+		page.getByText('Offline Missing', {exact: true}).first()
+	).toBeVisible();
+	await page.getByTitle('Workbench').click();
+	await page
+		.getByRole('listitem')
+		.filter({has: page.getByText('Offline Start', {exact: true})})
+		.getByRole('button')
+		.click();
 
 	const [testPage] = await Promise.all([
 		context.waitForEvent('page'),
 		page
+			.getByRole('region', {name: 'Offline Start', exact: true})
 			.getByRole('button', {name: 'Test From Here', exact: true})
-			.first()
 			.click()
 	]);
 
@@ -171,7 +384,7 @@ test('a fresh install can create and test a project offline', async ({
 		testPage
 			.frameLocator('iframe[title="Story test preview"]')
 			.locator('tw-passage')
-	).toContainText(marker);
+	).toContainText(replacedMarker);
 	await expect(
 		testPage.getByText("Couldn't load story format properties")
 	).toHaveCount(0);

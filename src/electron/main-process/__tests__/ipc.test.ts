@@ -75,7 +75,11 @@ import {
 	projectCapabilityField
 } from '../project-capabilities';
 import {storyPreviewWindowManager} from '../story-preview-window-manager';
-import {performanceHarnessEnabled} from '../performance-harness';
+import {
+	performanceHarnessEnabled,
+	recordMemoryCheckpoint,
+	sampleWorkerHeapCdp
+} from '../performance-harness';
 
 jest.mock('../json-file');
 jest.mock('../native');
@@ -89,7 +93,9 @@ jest.mock('../story-file');
 jest.mock('../story-formats');
 jest.mock('../performance-harness', () => ({
 	...jest.requireActual('../performance-harness'),
-	performanceHarnessEnabled: jest.fn(() => false)
+	performanceHarnessEnabled: jest.fn(() => false),
+	recordMemoryCheckpoint: jest.fn(),
+	sampleWorkerHeapCdp: jest.fn()
 }));
 
 describe('initIpc()', () => {
@@ -130,6 +136,8 @@ describe('initIpc()', () => {
 	const reconcileProjectSessionForPerformanceMock =
 		reconcileProjectSessionForPerformance as jest.Mock;
 	const performanceHarnessEnabledMock = performanceHarnessEnabled as jest.Mock;
+	const recordMemoryCheckpointMock = recordMemoryCheckpoint as jest.Mock;
+	const sampleWorkerHeapCdpMock = sampleWorkerHeapCdp as jest.Mock;
 	const projectSessionAssetReadBaselinesMock =
 		projectSessionAssetReadBaselines as jest.Mock;
 	const projectSessionPackageAssetReadPlanMock =
@@ -747,6 +755,91 @@ describe('initIpc()', () => {
 		await expect(
 			reconcile?.[1]({sender: {id: 702}}, capability)
 		).rejects.toThrow();
+	});
+
+	it('records one renderer, CDP-worker, and worker-response WASM tuple', async () => {
+		performanceHarnessEnabledMock.mockReturnValue(true);
+		sampleWorkerHeapCdpMock.mockResolvedValue({
+			sampledAtEpochMs: 10_020,
+			targetId: 'worker-target',
+			targetUrl: 'file:///app/twine-wasm-worker-abc.js',
+			totalSize: 2048,
+			usedSize: 1024
+		});
+		const originalMemoryInfo = (
+			process as typeof process & {
+				getProcessMemoryInfo?: () => Promise<Electron.ProcessMemoryInfo>;
+			}
+		).getProcessMemoryInfo;
+		(
+			process as typeof process & {
+				getProcessMemoryInfo: () => Promise<Electron.ProcessMemoryInfo>;
+			}
+		).getProcessMemoryInfo = async () => ({
+			private: 1,
+			residentSet: 1,
+			shared: 0
+		});
+		try {
+			initIpc();
+			const checkpoint = handleMock.mock.calls
+				.filter(call => call[0] === 'performance-harness-checkpoint')
+				.at(-1);
+			const sender = {id: 701};
+			await checkpoint?.[1]({sender}, 'coherent', {
+				usedJSHeapSize: 512,
+				workerResponseAtEpochMs: 10_000,
+				workerWasmMemoryBytes: 4096
+			});
+			expect(sampleWorkerHeapCdpMock).toHaveBeenCalledWith();
+			expect(recordMemoryCheckpointMock).toHaveBeenLastCalledWith(
+				'coherent',
+				expect.objectContaining({
+					usedJSHeapSize: 512,
+					workerHeapCdpResponseDriftMs: 20,
+					workerHeapCdpTargetId: 'worker-target',
+					workerHeapCdpTotalSize: 2048,
+					workerHeapCdpUsedBytes: 1024,
+					workerResponseAtEpochMs: 10_000,
+					workerWasmMemoryBytes: 4096
+				}),
+				expect.objectContaining({private: 1})
+			);
+		} finally {
+			if (originalMemoryInfo) {
+				(
+					process as typeof process & {
+						getProcessMemoryInfo: () => Promise<Electron.ProcessMemoryInfo>;
+					}
+				).getProcessMemoryInfo = originalMemoryInfo;
+			} else {
+				delete (process as {getProcessMemoryInfo?: unknown})
+					.getProcessMemoryInfo;
+			}
+		}
+	});
+
+	it('rejects an incoherent runner-owned heap sample before recording a checkpoint', async () => {
+		performanceHarnessEnabledMock.mockReturnValue(true);
+		sampleWorkerHeapCdpMock.mockResolvedValue({
+			sampledAtEpochMs: 10_020,
+			targetId: 'worker-target',
+			targetUrl: 'file:///app/twine-wasm-worker-abc.js',
+			totalSize: 100,
+			usedSize: 101
+		});
+		initIpc();
+		const checkpoint = handleMock.mock.calls
+			.filter(call => call[0] === 'performance-harness-checkpoint')
+			.at(-1);
+		await expect(
+			checkpoint?.[1]({sender: {id: 701}}, 'coherent', {
+				usedJSHeapSize: 512,
+				workerResponseAtEpochMs: 10_000,
+				workerWasmMemoryBytes: 4096
+			})
+		).rejects.toThrow('usedSize no greater than totalSize');
+		expect(recordMemoryCheckpointMock).not.toHaveBeenCalled();
 	});
 
 	it('reads an exact package inventory with server-owned limits', async () => {

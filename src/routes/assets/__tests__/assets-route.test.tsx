@@ -15,7 +15,7 @@ import {
 	type CoreProjectHost,
 	type CoreAssetInventoryEntry
 } from '../../../core';
-import {StoreCoreProjectHost} from '../../../core/project-host';
+import {StoreCoreProjectHost} from '../../../test-util/core-project-host-runtime';
 import {saveProjectMetadata} from '../../../store/project-metadata';
 import type {Story} from '../../../store/stories';
 import {AssetsRoute} from '../assets-route';

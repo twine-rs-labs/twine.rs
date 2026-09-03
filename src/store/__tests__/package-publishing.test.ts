@@ -1,5 +1,5 @@
 import type {CoreAssetInventoryEntry} from '../../core';
-import type {CoreProjectHost} from '../../core/project-host';
+import type {CoreProjectHost} from '../../test-util/core-project-host-runtime';
 import type {NativeProjectPackageAssetPayloadBatch} from '../../electron/shared';
 import {fakeStory} from '../../test-util';
 import {

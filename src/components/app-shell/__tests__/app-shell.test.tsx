@@ -1,13 +1,13 @@
 import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import * as React from 'react';
-import {MemoryRouter, useNavigate} from 'react-router';
+import {MemoryRouter, useLocation, useNavigate} from 'react-router';
 import {
 	CoreProjectHostProvider,
 	diagnosticDismissalsChangedEvent,
 	diagnosticIdentity,
-	saveDismissedDiagnosticIds,
-	StoreCoreProjectHost
+	saveDismissedDiagnosticIds
 } from '../../../core';
+import {StoreCoreProjectHost} from '../../../test-util/core-project-host-runtime';
 import type {CoreDiagnostic} from '../../../core/bindings/CoreDiagnostic';
 import type {CoreDiagnosticsPage} from '../../../core/bindings/CoreDiagnosticsPage';
 import type {CoreDiagnosticsSummary} from '../../../core/bindings/CoreDiagnosticsSummary';
@@ -19,7 +19,10 @@ import {fakeStory} from '../../../test-util/fakes';
 import {waitForMockPromises} from '../../../test-util';
 import {workbenchBufferCoordinator} from '../../../util/workbench-buffer-coordinator';
 import {AppShell} from '../app-shell';
-import {useAppShellContext} from '../app-shell-context';
+import {
+	useAppCommandContribution,
+	useAppShellContext
+} from '../app-shell-context';
 
 const mockPlayStory = jest.fn();
 const mockProofStory = jest.fn();
@@ -101,10 +104,18 @@ const MockRouteActions: React.FC = () => {
 	React.useEffect(() => {
 		appShell.setToolbar({
 			pinnedControls: <span>Pin Control</span>,
-			tabs: {
-				Build: <button type="button">Build Action</button>,
-				Story: <button type="button">Story Action</button>
-			}
+			tabs: [
+				{
+					content: <button type="button">Build Action</button>,
+					id: 'build',
+					label: 'Build'
+				},
+				{
+					content: <button type="button">Story Action</button>,
+					id: 'story',
+					label: 'Story'
+				}
+			]
 		});
 		appShell.setDock({
 			content: <span>Dock Content</span>,
@@ -130,7 +141,75 @@ const ShellRouteNavigator: React.FC<{storyId: string}> = ({storyId}) => {
 	);
 };
 
-async function renderShell(story: Story, route = `/stories/${story.id}`) {
+const ScopedTestCommand: React.FC<{
+	disabled: boolean;
+	onRun: () => void;
+}> = ({disabled, onRun}) => {
+	useAppCommandContribution('story-edit.route-test', [
+		{
+			contextKey: disabled ? 'disabled' : 'available',
+			disabled,
+			disabledReason: disabled
+				? 'Route command is no longer available'
+				: undefined,
+			group: 'Toolbar',
+			id: 'story-edit.route-test',
+			label: 'Route Scoped Action',
+			run: onRun
+		}
+	]);
+
+	return null;
+};
+
+const RouteCommandHarness: React.FC<{onRun: () => void}> = ({onRun}) => {
+	const {pathname} = useLocation();
+	const navigate = useNavigate();
+	const [disabled, setDisabled] = React.useState(false);
+
+	return (
+		<>
+			<button onClick={() => setDisabled(true)} type="button">
+				Disable route command
+			</button>
+			<button onClick={() => navigate('/settings')} type="button">
+				Leave command route
+			</button>
+			{pathname.startsWith('/stories/') && (
+				<ScopedTestCommand disabled={disabled} onRun={onRun} />
+			)}
+		</>
+	);
+};
+
+const LiveShortcutContribution: React.FC<{
+	onRun: (version: number) => void;
+}> = ({onRun}) => {
+	const [version, setVersion] = React.useState(0);
+
+	useAppCommandContribution('story-edit.live-shortcut', [
+		{
+			contextKey: 'stable-context',
+			group: 'Toolbar',
+			id: 'story-edit.live-shortcut',
+			keybinding: {key: 'j', primaryKey: true},
+			label: 'Live Shortcut',
+			run: () => onRun(version)
+		}
+	]);
+
+	return (
+		<button onClick={() => setVersion(1)} type="button">
+			Refresh shortcut callback
+		</button>
+	);
+};
+
+async function renderShell(
+	story: Story,
+	route = `/stories/${story.id}`,
+	routeContent?: React.ReactNode
+) {
 	const queryWordCount = jest.spyOn(
 		StoreCoreProjectHost.prototype,
 		'queryStoryWordCountAsync'
@@ -141,6 +220,7 @@ async function renderShell(story: Story, route = `/stories/${story.id}`) {
 				<MemoryRouter initialEntries={[route]}>
 					<AppShell>
 						<MockRouteActions />
+						{routeContent}
 					</AppShell>
 				</MemoryRouter>
 			</CoreProjectHostProvider>
@@ -209,6 +289,10 @@ describe('AppShell', () => {
 			'page'
 		);
 		expect(await screen.findByText('Build Action')).toBeInTheDocument();
+		expect(screen.queryByText('Story Action')).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole('tab', {name: 'Story'}));
+		expect(screen.getByText('Story Action')).toBeVisible();
+		expect(screen.queryByText('Build Action')).not.toBeInTheDocument();
 		expect(screen.getByText('Pin Control')).toBeInTheDocument();
 		expect(
 			screen.getByRole('complementary', {name: 'Inspector'})
@@ -858,7 +942,14 @@ describe('AppShell', () => {
 	it('opens the global command palette and runs shell commands', async () => {
 		await renderShell(story);
 
-		fireEvent.keyDown(window, {key: 'k', metaKey: true});
+		const event = new KeyboardEvent('keydown', {
+			bubbles: true,
+			cancelable: true,
+			key: 'k',
+			metaKey: true
+		});
+		window.dispatchEvent(event);
+		expect(event.defaultPrevented).toBe(true);
 
 		const input = await screen.findByLabelText('Command');
 
@@ -878,6 +969,126 @@ describe('AppShell', () => {
 
 		await waitFor(() => expect(input).toHaveFocus());
 		expect(screen.getByText('⌘ Enter')).toBeInTheDocument();
+	});
+
+	it('closes the command palette with its reserved shortcut', async () => {
+		await renderShell(story);
+		fireEvent.keyDown(window, {key: 'k', metaKey: true});
+		expect(await screen.findByLabelText('Command')).toBeInTheDocument();
+		const closeEvent = new KeyboardEvent('keydown', {
+			bubbles: true,
+			cancelable: true,
+			key: 'k',
+			metaKey: true
+		});
+		window.dispatchEvent(closeEvent);
+		expect(closeEvent.defaultPrevented).toBe(true);
+		await waitFor(() =>
+			expect(screen.queryByLabelText('Command')).not.toBeInTheDocument()
+		);
+	});
+
+	it('keeps Cmd+K available from an editor but ignores IME composition', async () => {
+		await renderShell(story);
+		const editor = document.createElement('textarea');
+		document.body.append(editor);
+		editor.focus();
+		fireEvent.keyDown(editor, {isComposing: true, key: 'k', metaKey: true});
+		expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+		fireEvent.keyDown(editor, {key: 'k', metaKey: true});
+		expect(await screen.findByRole('dialog')).toBeInTheDocument();
+		editor.remove();
+	});
+
+	it('does not open or execute global commands through another modal', async () => {
+		await renderShell(story);
+		const modal = document.createElement('div');
+		modal.setAttribute('role', 'dialog');
+		const modalButton = document.createElement('button');
+		modal.append(modalButton);
+		document.body.append(modal);
+		modalButton.focus();
+
+		const paletteEvent = new KeyboardEvent('keydown', {
+			bubbles: true,
+			cancelable: true,
+			key: 'k',
+			metaKey: true
+		});
+		modalButton.dispatchEvent(paletteEvent);
+		fireEvent.keyDown(modalButton, {key: 'Enter', metaKey: true});
+
+		expect(paletteEvent.defaultPrevented).toBe(false);
+		expect(screen.queryByLabelText('Command')).not.toBeInTheDocument();
+		expect(mockPlayStory).not.toHaveBeenCalled();
+		modal.remove();
+	});
+
+	it('leaves a rejected palette shortcut outside an aria-modal unconsumed', async () => {
+		await renderShell(story);
+		const modal = document.createElement('div');
+		modal.setAttribute('aria-modal', 'true');
+		document.body.append(modal);
+		const paletteEvent = new KeyboardEvent('keydown', {
+			bubbles: true,
+			cancelable: true,
+			key: 'k',
+			metaKey: true
+		});
+		window.dispatchEvent(paletteEvent);
+
+		expect(paletteEvent.defaultPrevented).toBe(false);
+		expect(screen.queryByLabelText('Command')).not.toBeInTheDocument();
+		modal.remove();
+	});
+
+	it('refreshes and unregisters a route command while the palette remains open', async () => {
+		const run = jest.fn();
+		await renderShell(
+			story,
+			`/stories/${story.id}`,
+			<RouteCommandHarness onRun={run} />
+		);
+
+		fireEvent.click(screen.getByRole('button', {name: 'Command'}));
+		const input = await screen.findByLabelText('Command');
+		fireEvent.change(input, {target: {value: 'route scoped'}});
+		expect(
+			screen.getByRole('option', {name: /Route Scoped Action/})
+		).toBeEnabled();
+
+		fireEvent.click(
+			screen.getByRole('button', {name: 'Disable route command'})
+		);
+		expect(
+			await screen.findByText('Route command is no longer available')
+		).toBeInTheDocument();
+		fireEvent.keyDown(input, {key: 'Enter'});
+		expect(run).not.toHaveBeenCalled();
+		expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+		fireEvent.click(screen.getByRole('button', {name: 'Leave command route'}));
+		await waitFor(() =>
+			expect(screen.queryByText('Route Scoped Action')).not.toBeInTheDocument()
+		);
+		expect(screen.getByText('No commands')).toBeInTheDocument();
+		expect(screen.getByRole('dialog')).toBeInTheDocument();
+	});
+
+	it('resolves a contributed shortcut callback at execution time', async () => {
+		const run = jest.fn();
+		await renderShell(
+			story,
+			`/stories/${story.id}`,
+			<LiveShortcutContribution onRun={run} />
+		);
+
+		fireEvent.click(
+			screen.getByRole('button', {name: 'Refresh shortcut callback'})
+		);
+		fireEvent.keyDown(window, {key: 'j', metaKey: true});
+
+		expect(run).toHaveBeenCalledWith(1);
 	});
 
 	it('runs accessible keyboard shortcuts for shell commands', async () => {

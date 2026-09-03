@@ -208,9 +208,16 @@ function tagsFor(index) {
 }
 
 function linksFor(index, count) {
-	const links = [];
+	const m3QueryTargetIndex = Math.max(1, Math.floor(count / 2));
+	const links = [
+		{
+			kind: 'm3Reference',
+			target: passageName(m3QueryTargetIndex),
+			text: `[[M3 Query Target->${passageName(m3QueryTargetIndex)}]]`
+		}
+	];
 
-	if (index < count) {
+	if (index < count && index + 1 !== m3QueryTargetIndex) {
 		links.push({
 			kind: 'next',
 			target: passageName(index + 1),
@@ -218,7 +225,7 @@ function linksFor(index, count) {
 		});
 	}
 
-	if (index + 7 <= count) {
+	if (index + 7 <= count && index + 7 !== m3QueryTargetIndex) {
 		links.push({
 			kind: 'branch',
 			target: passageName(index + 7),
@@ -226,7 +233,7 @@ function linksFor(index, count) {
 		});
 	}
 
-	if (index % 101 === 0) {
+	if (index % 101 === 0 && index !== m3QueryTargetIndex) {
 		links.push({
 			kind: 'self',
 			target: passageName(index),
@@ -319,7 +326,7 @@ function generateStory(count, options) {
 
 			return result;
 		},
-		{branch: 0, broken: 0, next: 0, self: 0, total: 0}
+		{branch: 0, broken: 0, m3Reference: 0, next: 0, self: 0, total: 0}
 	);
 
 	return {linkCounts, story};
@@ -438,7 +445,28 @@ async function writeFixture(count, options) {
 		bodyWords: options.bodyWords,
 		files: files.map(file => path.relative(rootDir, file)),
 		linkCounts,
+		m3QueryTarget: {
+			definitionNames: Array.from({length: 20}, (_, index) =>
+				passageName(index + 1)
+			),
+			passageId: deterministicId('passage', Math.max(1, Math.floor(count / 2))),
+			passageName: passageName(Math.max(1, Math.floor(count / 2))),
+			storyId: deterministicId('story', count)
+		},
+		m4DiagnosticFixTarget: {
+			expectedChangeCount: linkCounts.broken,
+			selection: 'allSafe',
+			storyId: deterministicId('story', count)
+		},
 		passageCount: count,
+		// This target is away from the boundaries. The Electron refactor phase
+		// consumes this manifest value, never UI ordering.
+		refactorTarget: {
+			afterName: passageName(Math.floor(count / 2)).toLowerCase(),
+			beforeName: passageName(Math.floor(count / 2)),
+			passageId: deterministicId('passage', Math.floor(count / 2)),
+			storyId: deterministicId('story', count)
+		},
 		storyFormat: story.storyFormat,
 		storyFormatVersion: story.storyFormatVersion
 	};

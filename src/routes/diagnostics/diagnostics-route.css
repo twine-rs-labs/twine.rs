@@ -237,6 +237,13 @@
 	margin: 16px 0;
 }
 
+.diagnostics-route__detail .diagnostics-route__manual-fix {
+	background: var(--ink-2);
+	border-left: 2px solid var(--sem-warn);
+	margin: 0;
+	padding: 8px 10px;
+}
+
 .diagnostics-route__detail-location {
 	color: var(--tx-4);
 	font-family: var(--font-mono);

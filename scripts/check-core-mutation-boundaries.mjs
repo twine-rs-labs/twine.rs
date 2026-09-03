@@ -30,6 +30,67 @@ async function visit(directory) {
 			violations.push(`${displayPath}: imports the removed legacy undo store`);
 		}
 		if (
+			!displayPath.startsWith('src/core/wasm/') &&
+			!displayPath.includes('/__tests__/') &&
+			/(?:import|export)[\s\S]*?from\s+['"][^'"]*(?:core\/wasm\/pkg\/twine_wasm|wasm\/pkg\/twine_wasm)['"]/.test(
+				source
+			)
+		) {
+			violations.push(
+				`${displayPath}: imports the generated WASM package outside the worker/build or boundary-test seam`
+			);
+		}
+		if (
+			/refactor-runtime-writer/.test(source) &&
+			![
+				'src/core/project-host.tsx',
+				'src/store/project-session-sync.tsx'
+			].includes(displayPath)
+		) {
+			violations.push(
+				`${displayPath}: imports the trusted refactor runtime writer outside its integration boundary`
+			);
+		}
+		if (
+			![
+				'src/core/project-host.tsx',
+				'src/test-util/core-project-host-runtime.ts'
+			].includes(displayPath) &&
+			/import[\s\S]*?from\s+['"][^'"]*(?:core-project-host-runtime|project-host-runtime)['"]/.test(
+				source
+			)
+		) {
+			violations.push(
+				`${displayPath}: imports the concrete Core host runtime instead of the public capability facade`
+			);
+		}
+		if (
+			![
+				'src/core/project-host.tsx',
+				'src/core/project-host-public.tsx',
+				'src/test-util/core-project-host-runtime.ts'
+			].includes(displayPath) &&
+			/from\s+['"][^'"]*(?:\/|\.)project-host['"]/.test(source)
+		) {
+			violations.push(
+				`${displayPath}: imports the Core host runtime directly instead of the public facade`
+			);
+		}
+		if (
+			![
+				'src/core/project-host.tsx',
+				'src/core/project-host-public.tsx',
+				'src/test-util/core-project-host-runtime.ts'
+			].includes(displayPath) &&
+			/import\s+(?:type\s+)?{[^}]*\b(?:StoreCoreProjectHost|ProjectScopedCoreProjectHost)\b[^}]*}\s*from\s*['"][^'"]*project-host['"]/s.test(
+				source
+			)
+		) {
+			violations.push(
+				`${displayPath}: references a concrete Core host instead of the public capability facade`
+			);
+		}
+		if (
 			!displayPath.startsWith('src/store/') &&
 			/\breplaceInStory\s*\(/.test(source)
 		) {

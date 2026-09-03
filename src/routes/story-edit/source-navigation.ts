@@ -9,15 +9,47 @@ export type SourceNavigationTarget =
 	| {kind: 'script'}
 	| {kind: 'stylesheet'};
 
+export type SourceNavigationFocusIntent = 'editor' | 'preserve';
+
+const focusPreservationLeases = new Map<string, 'available' | 'claimed'>();
+let nextFocusPreservationLease = 0;
+
+export function allocateSourceNavigationFocusPreservationLease() {
+	const token = `source-focus-${++nextFocusPreservationLease}`;
+
+	focusPreservationLeases.set(token, 'available');
+	return token;
+}
+
+export function claimSourceNavigationFocusPreservationLease(
+	token: string | undefined
+) {
+	if (!token || focusPreservationLeases.get(token) !== 'available') {
+		return false;
+	}
+
+	focusPreservationLeases.set(token, 'claimed');
+	return true;
+}
+
+export function releaseSourceNavigationFocusPreservationLease(
+	token: string | undefined
+) {
+	return token ? focusPreservationLeases.delete(token) : false;
+}
+
 export interface SourceNavigationSearch {
 	query: string;
 	scope?: CoreSearchScope;
 }
 
 export interface SourceNavigationOptions {
+	endOffset?: number | null;
+	focus?: SourceNavigationFocusIntent;
 	line?: number | null;
 	mode?: 'graph' | 'split' | 'text';
 	offset?: number | null;
+	restoreToken?: string;
 	search?: SourceNavigationSearch;
 	target?: SourceNavigationTarget;
 }
@@ -120,7 +152,16 @@ export function resolveSourceNavigationTarget(
 
 export function sourceTarget(
 	story: Story,
-	{line, mode = 'text', offset, search, target}: SourceNavigationOptions
+	{
+		endOffset,
+		focus = 'editor',
+		line,
+		mode = 'text',
+		offset,
+		restoreToken,
+		search,
+		target
+	}: SourceNavigationOptions
 ) {
 	const query = new URLSearchParams({mode});
 
@@ -138,6 +179,18 @@ export function sourceTarget(
 
 	if (typeof offset === 'number' && Number.isFinite(offset)) {
 		query.set('offset', String(Math.max(0, Math.trunc(offset))));
+	}
+
+	if (typeof endOffset === 'number' && Number.isFinite(endOffset)) {
+		query.set('end', String(Math.max(0, Math.trunc(endOffset))));
+	}
+
+	if (focus === 'preserve') {
+		query.set('focus', focus);
+	}
+
+	if (restoreToken) {
+		query.set('restoreToken', restoreToken);
 	}
 
 	if (typeof line === 'number' && Number.isFinite(line)) {

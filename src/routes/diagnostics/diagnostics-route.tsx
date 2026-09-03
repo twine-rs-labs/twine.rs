@@ -1,7 +1,13 @@
 import * as React from 'react';
 import classNames from 'classnames';
-import {useNavigate, useParams} from 'react-router';
+import {useLocation, useNavigate, useParams} from 'react-router';
 import {Badge, Button, Input, TablerIcon} from '../../components/design-system';
+import {useAppCommandContribution} from '../../components/app-shell';
+import {
+	commandIdSegment,
+	type AppCommandExecutionContext
+} from '../../components/app-shell/command-registry';
+import {DiagnosticFixReview} from '../../components/diagnostic/diagnostic-fix-review';
 import {
 	diagnosticDismissalsChangedEvent,
 	diagnosticGroup,
@@ -12,7 +18,8 @@ import {
 	saveDismissedDiagnosticIds,
 	useCoreProjectHost
 } from '../../core';
-import {quickFixActionsForDiagnostic} from '../../core/quick-fix-registry';
+import {quickFixDescriptionsForDiagnostic} from '../../core/quick-fix-registry';
+import type {PlanDiagnosticFixesRequest} from '../../core/bindings/PlanDiagnosticFixesRequest';
 import type {DiagnosticsViewModelItem} from '../../core/view-models';
 import type {CoreDiagnosticSeverity} from '../../core/bindings/CoreDiagnosticSeverity';
 import type {CoreDiagnosticsPage} from '../../core/bindings/CoreDiagnosticsPage';
@@ -22,6 +29,8 @@ import {
 	sourceNavigationTargetFromSourceId,
 	sourceTarget
 } from '../story-edit/source-navigation';
+import {useDiagnosticFixReview} from './use-diagnostic-fix-review';
+import {diagnosticFixReviewTargetFromState} from './diagnostic-fix-navigation';
 import './diagnostics-route.css';
 
 type SeverityFilter = CoreDiagnosticSeverity | 'all';
@@ -124,6 +133,7 @@ function typeCount(items: RouteDiagnosticItem[], group: string) {
 export const DiagnosticsRoute: React.FC = () => {
 	const {storyId = ''} = useParams<'storyId'>();
 	const {dispatch, stories} = useStoriesContext();
+	const location = useLocation();
 	const navigate = useNavigate();
 	const coreProjectHost = useCoreProjectHost();
 	const story = storyForId(stories, storyId);
@@ -154,6 +164,60 @@ export const DiagnosticsRoute: React.FC = () => {
 	const [dismissedIds, setDismissedIds] = React.useState<Set<string>>(
 		() => new Set()
 	);
+	const [fixReviewRequest, setFixReviewRequest] =
+		React.useState<PlanDiagnosticFixesRequest>();
+	const fixReviewFocusRestore = React.useRef<(() => void) | undefined>(
+		undefined
+	);
+	const [navigationReviewTarget, setNavigationReviewTarget] = React.useState(
+		() => diagnosticFixReviewTargetFromState(location.state)
+	);
+	const activeFixReviewRequest =
+		fixReviewRequest?.storyId === story?.id ? fixReviewRequest : undefined;
+	const fixReviewController = useDiagnosticFixReview(
+		coreProjectHost,
+		activeFixReviewRequest,
+		() => {
+			setFixReviewRequest(undefined);
+			setPatchVersion(version => version + 1);
+			const restoreFocus = fixReviewFocusRestore.current;
+			fixReviewFocusRestore.current = undefined;
+			restoreFocus?.();
+		}
+	);
+	React.useEffect(() => {
+		setFixReviewRequest(current => {
+			if (current && current.storyId !== story?.id) {
+				fixReviewFocusRestore.current = undefined;
+				return undefined;
+			}
+			return current;
+		});
+	}, [story?.id]);
+
+	React.useEffect(() => {
+		const target = diagnosticFixReviewTargetFromState(location.state);
+
+		if (!target) {
+			return;
+		}
+
+		setNavigationReviewTarget(target);
+		navigate(
+			{
+				hash: location.hash,
+				pathname: location.pathname,
+				search: location.search
+			},
+			{replace: true, state: null}
+		);
+	}, [
+		location.hash,
+		location.pathname,
+		location.search,
+		location.state,
+		navigate
+	]);
 
 	React.useEffect(
 		() =>
@@ -272,14 +336,25 @@ export const DiagnosticsRoute: React.FC = () => {
 		);
 	}, [query, severity, statusItems, type]);
 	const selectedItem =
-		visibleItems.find(item => item.id === selectedId) ?? visibleItems[0];
+		visibleItems.find(
+			item => item.dismissalId === navigationReviewTarget?.diagnosticId
+		) ??
+		visibleItems.find(item => item.id === selectedId) ??
+		visibleItems[0];
 	const selectedPassage =
 		story && selectedItem ? diagnosticPassage(story, selectedItem) : undefined;
-	const selectedActions =
-		story && selectedItem
-			? quickFixActionsForDiagnostic(coreProjectHost, story, selectedItem.core)
-			: [];
-	const enabledActions = selectedActions.filter(action => action.enabled);
+	const selectedActions = selectedItem
+		? quickFixDescriptionsForDiagnostic(selectedItem.core)
+		: [];
+	const automaticActions = selectedActions.filter(
+		action => action.applicability === 'automatic'
+	);
+	const fixAllSafeAvailable =
+		activeItems.some(item =>
+			quickFixDescriptionsForDiagnostic(item.core).some(
+				action => action.applicability === 'automatic'
+			)
+		) || Boolean(diagnosticsPage?.nextCursor);
 
 	React.useEffect(() => {
 		if (selectedItem && selectedItem.id !== selectedId) {
@@ -344,26 +419,48 @@ export const DiagnosticsRoute: React.FC = () => {
 		);
 	}
 
-	function fixAllSafe() {
+	function fixAllSafe(restoreFocus?: () => void) {
 		if (!story || !diagnosticsPage) {
 			return;
 		}
 
-		for (const item of visibleItems) {
-			if (item.dismissed) {
-				continue;
-			}
+		fixReviewFocusRestore.current = restoreFocus;
+		setFixReviewRequest({
+			selection: {
+				excludedDiagnosticIds: [...dismissedIds],
+				type: 'allSafe'
+			},
+			storyId: story.id
+		});
+	}
 
-			for (const action of quickFixActionsForDiagnostic(
-				coreProjectHost,
-				story,
-				item.core
-			)) {
-				if (action.enabled) {
-					action.apply();
-				}
-			}
-		}
+	function reviewSingleFix(
+		item: RouteDiagnosticItem,
+		command: string,
+		restoreFocus?: () => void
+	) {
+		if (!story || item.dismissed) return;
+		fixReviewFocusRestore.current = restoreFocus;
+		setFixReviewRequest({
+			selection: {
+				fixes: [
+					{
+						diagnosticId: item.dismissalId,
+						quickFixCommand: command
+					}
+				],
+				type: 'only'
+			},
+			storyId: story.id
+		});
+	}
+
+	function closeFixReview() {
+		fixReviewController.closeBoundary();
+		setFixReviewRequest(undefined);
+		const restoreFocus = fixReviewFocusRestore.current;
+		fixReviewFocusRestore.current = undefined;
+		restoreFocus?.();
 	}
 
 	function updateDismissed(
@@ -452,6 +549,114 @@ export const DiagnosticsRoute: React.FC = () => {
 				}
 			});
 	}
+
+	React.useEffect(() => {
+		if (!navigationReviewTarget || !story || !diagnosticsPage) {
+			return;
+		}
+
+		const item = items.find(
+			candidate => candidate.dismissalId === navigationReviewTarget.diagnosticId
+		);
+
+		if (item) {
+			const action = quickFixDescriptionsForDiagnostic(item.core).find(
+				candidate =>
+					candidate.applicability === 'automatic' &&
+					candidate.command === navigationReviewTarget.quickFixCommand
+			);
+
+			setNavigationReviewTarget(undefined);
+			if (action && !item.dismissed) {
+				setSelectedId(item.id);
+				reviewSingleFix(item, action.command);
+			}
+			return;
+		}
+
+		if (!diagnosticsPage.nextCursor) {
+			setNavigationReviewTarget(undefined);
+			return;
+		}
+
+		if (loadMoreState.kind === 'idle') {
+			loadNextDiagnosticsPage();
+		}
+	}, [
+		diagnosticsPage,
+		items,
+		loadMoreState.kind,
+		navigationReviewTarget,
+		story
+	]);
+
+	useAppCommandContribution(
+		'diagnostics.route',
+		story && diagnosticsPage
+			? [
+					{
+						contextKey: `${story.id}:${selectedItem?.id ?? 'none'}:${diagnosticsPage.revision}`,
+						disabled: !selectedItem || !diagnosticSourceTarget(selectedItem),
+						disabledReason: !selectedItem
+							? 'Select a diagnostic'
+							: diagnosticSourceTarget(selectedItem)
+								? undefined
+								: 'This diagnostic has no source location',
+						group: 'Toolbar',
+						icon: 'file-text',
+						id: 'diagnostics.reveal-source',
+						label: 'Reveal in Source',
+						priority: 20,
+						run: () => reveal(selectedItem, 'text')
+					},
+					{
+						contextKey: `${story.id}:${selectedItem?.id ?? 'none'}:${diagnosticsPage.revision}`,
+						disabled: !selectedPassage,
+						disabledReason: selectedPassage
+							? undefined
+							: 'This diagnostic has no passage',
+						group: 'Toolbar',
+						icon: 'binary-tree',
+						id: 'diagnostics.reveal-graph',
+						label: 'Reveal in Graph',
+						priority: 20,
+						run: () => reveal(selectedItem, 'graph')
+					},
+					{
+						contextKey: `${story.id}:${diagnosticsPage.revision}:${dismissedIds.size}`,
+						disabled: !fixAllSafeAvailable,
+						disabledReason: fixAllSafeAvailable
+							? undefined
+							: 'No automatic fixes are available',
+						group: 'Toolbar',
+						icon: 'wand',
+						id: 'diagnostics.fix-all-safe',
+						label: 'Fix All Safe',
+						priority: 20,
+						run: context => fixAllSafe(context?.restoreFocus)
+					},
+					...automaticActions.map(action => ({
+						contextKey: `${story.id}:${selectedItem?.dismissalId ?? 'none'}:${action.command}:${diagnosticsPage.revision}`,
+						disabled: Boolean(selectedItem?.dismissed),
+						disabledReason: selectedItem?.dismissed
+							? 'This diagnostic is dismissed'
+							: undefined,
+						group: 'Toolbar' as const,
+						icon: 'wand',
+						id: `diagnostics.quick-fix.${commandIdSegment(`${selectedItem?.dismissalId ?? ''}:${action.command}`)}`,
+						label: action.title,
+						priority: 21,
+						run: (context?: AppCommandExecutionContext) =>
+							selectedItem &&
+							reviewSingleFix(
+								selectedItem,
+								action.command,
+								context?.restoreFocus
+							)
+					}))
+				]
+			: []
+	);
 
 	if (!story) {
 		return (
@@ -656,18 +861,17 @@ export const DiagnosticsRoute: React.FC = () => {
 					</Button>
 					<Button
 						disabled={
-							!visibleItems.some(
+							!hasMoreDiagnostics &&
+							!items.some(
 								item =>
 									!item.dismissed &&
-									quickFixActionsForDiagnostic(
-										coreProjectHost,
-										story,
-										item.core
-									).some(action => action.enabled)
+									quickFixDescriptionsForDiagnostic(item.core).some(
+										action => action.applicability === 'automatic'
+									)
 							)
 						}
 						icon="wand"
-						onClick={fixAllSafe}
+						onClick={() => fixAllSafe()}
 						size="sm"
 						variant="primary"
 					>
@@ -716,9 +920,13 @@ export const DiagnosticsRoute: React.FC = () => {
 											<span className="diagnostics-route__row-fix">
 												{item.dismissed
 													? 'Dismissed'
-													: item.core.quickFixes.length > 0
+													: item.core.quickFixes.some(
+																fix => fix.applicability === 'automatic'
+														  )
 														? 'Fix'
-														: 'Review'}
+														: item.core.quickFixes.length > 0
+															? 'Manual'
+															: 'Review'}
 											</span>
 										</button>
 									</React.Fragment>
@@ -788,19 +996,31 @@ export const DiagnosticsRoute: React.FC = () => {
 						<div className="diagnostics-route__section-title">Proposed Fix</div>
 						{selectedActions.length > 0 ? (
 							<div className="diagnostics-route__actions">
-								{selectedActions.map(action => (
-									<Button
-										block
-										disabled={!action.enabled}
-										icon="wand"
-										key={action.command}
-										onClick={action.apply}
-										size="sm"
-										variant={action.enabled ? 'primary' : 'ghost'}
-									>
-										{action.title}
-									</Button>
-								))}
+								{selectedActions.map(action =>
+									action.applicability === 'automatic' ? (
+										<Button
+											block
+											disabled={selectedItem.dismissed}
+											icon="wand"
+											key={action.command}
+											onClick={() =>
+												reviewSingleFix(selectedItem, action.command)
+											}
+											size="sm"
+											variant="primary"
+										>
+											Review {action.title}
+										</Button>
+									) : (
+										<p
+											className="diagnostics-route__manual-fix"
+											key={action.command}
+										>
+											<strong>Manual action:</strong> {action.title}. This fix
+											requires additional input.
+										</p>
+									)
+								)}
 							</div>
 						) : (
 							<p className="diagnostics-route__muted">
@@ -844,10 +1064,11 @@ export const DiagnosticsRoute: React.FC = () => {
 								Reveal Graph
 							</Button>
 						</div>
-						{enabledActions.length > 0 && (
+						{automaticActions.length > 0 && (
 							<p className="diagnostics-route__muted">
-								{enabledActions.length} safe fix
-								{enabledActions.length === 1 ? '' : 'es'} available.
+								{automaticActions.length} deterministic fix
+								{automaticActions.length === 1 ? '' : 'es'} available for
+								review.
 							</p>
 						)}
 					</>
@@ -859,6 +1080,22 @@ export const DiagnosticsRoute: React.FC = () => {
 					</div>
 				)}
 			</aside>
+			{activeFixReviewRequest && (
+				<DiagnosticFixReview
+					applying={fixReviewController.applying}
+					cursor={fixReviewController.cursor}
+					error={fixReviewController.error}
+					onApply={fixReviewController.handleApply}
+					onClose={closeFixReview}
+					onNextPage={fixReviewController.handleNextPage}
+					onPreviousPage={fixReviewController.handlePreviousPage}
+					onRetry={fixReviewController.handleRetry}
+					page={fixReviewController.page}
+					paging={fixReviewController.paging}
+					showPreviousPage={fixReviewController.showPreviousPage}
+					summary={fixReviewController.summary}
+				/>
+			)}
 		</div>
 	);
 };

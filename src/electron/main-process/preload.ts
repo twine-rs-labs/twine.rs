@@ -584,7 +584,10 @@ if (exposeAppBridge) {
 
 if (exposeAppBridge && process.env.TWINE_PERF === '1') {
 	contextBridge.exposeInMainWorld('twinePerformanceNative', {
-		async checkpoint(name: string, renderer: Record<string, number>) {
+		async checkpoint(
+			name: string,
+			renderer: Record<string, number | string | undefined>
+		) {
 			const nativeMemory = await rendererNativeMemorySnapshot();
 
 			return ipcRenderer.invoke('performance-harness-checkpoint', name, {

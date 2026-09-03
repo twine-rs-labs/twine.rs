@@ -23,6 +23,8 @@ import path from 'node:path';
 import {performance as nodePerformance} from 'node:perf_hooks';
 import {performanceReportSchemaVersion} from '../benchmarks/performance-report-schema.mjs';
 import {currentGitProvenance} from '../benchmarks/performance-tools.mjs';
+import type {RendererPerformanceSnapshot} from '../src/util/performance-harness';
+import {WorkerHeapCdpBroker} from '../src/test-util/worker-heap-cdp-broker';
 
 interface PerformanceSnapshot {
 	main: {
@@ -67,13 +69,32 @@ interface PerformanceSnapshot {
 			};
 		};
 		memoryCheckpoints: Array<{
-			appMetrics: PerformanceSnapshot['main']['appMetrics'];
 			mainHeap: Record<string, number>;
 			mainMemory: PerformanceSnapshot['main']['memory'];
 			mainProcessMemory?: PerformanceSnapshot['main']['processMemory'];
 			name: string;
+			ownedHighWater: {
+				jsHeapBytes: number;
+				milestone: string;
+				sampleCount: number;
+				totalBytes?: number;
+				wasmBytes?: number;
+				workerCdpResponseDriftMs?: number;
+				workerCdpSampledAtEpochMs?: number;
+				workerCdpUsedBytes?: number;
+				workerResponseAtEpochMs?: number;
+			};
+			processPrivateHighWater: {
+				mainPrivateBytes: number;
+				milestone: string;
+				rendererPrivateBytes: number;
+				sampleCount: number;
+				totalBytes: number;
+			};
+			processWorkingSetKiBByRole: Record<string, number>;
 			recordedAtEpochMs: number;
-			renderer: Record<string, number>;
+			renderer: Record<string, number | undefined>;
+			sampleCount: number;
 		}>;
 		timings: Array<{name: string; timeMs: number}>;
 		watcherMetrics: Array<{
@@ -92,127 +113,12 @@ interface PerformanceSnapshot {
 			timeEpochMs: number;
 		}>;
 	};
-	renderer: {
-		bridgeMetrics: Array<{
-			computeMs: number;
-			computeFinishedAtEpochMs: number;
-			computeStartedAtEpochMs: number;
-			kind: string;
-			mode: string;
-			mutationStages?: {
-				analysisMs: number;
-				deltaId: string;
-				fingerprintMs: number;
-				graphMs: number;
-				graphParsedSourceCount: number;
-				historyMs: number;
-				lookupAndDeltaMs: number;
-				operation: string;
-				patchFinalizeMs: number;
-				readModelMs: number;
-				revision: number;
-				savepointMs: number;
-				topologyChanged: boolean;
-				totalMs: number;
-			};
-			payloadBytes: number;
-			queuedMs: number;
-			receivedAtEpochMs: number;
-			requestBytes: number;
-			requestedAtEpochMs: number;
-			readModel?: {
-				analysisCacheSourceCount: number;
-				backlinkCacheBytes: number;
-				backlinkCacheEntryCount: number;
-				backlinkCacheHitCount: number;
-				backlinkScanCount: number;
-				backlinkScannedSourceCount: number;
-				fingerprintEntryCount: number;
-				graphCacheStoryCount: number;
-				historyBytes: number;
-				parsedSourceCount: number;
-				passageCount: number;
-				projectDocumentBytes: number;
-				readModelCacheStoryCount: number;
-				readModelFullBuildCount: number;
-				readModelIncrementalUpdateCount: number;
-				readModelLastTouchedSourceCount: number;
-				redoEntryCount: number;
-				undoEntryCount: number;
-			};
-			responseBytes: number;
-			roundTripMs: number;
-			rustFinishedAtEpochMs?: number;
-			rustStartedAtEpochMs?: number;
-			traceId?: string;
-			transferMs: number;
-			workerReceivedAtEpochMs: number;
-			workerRespondedAtEpochMs: number;
-			wasmMemoryBytes?: number;
-		}>;
-		core: {
-			activeSessions: number;
-			bootstrap?: {
-				passageCount: number;
-				storyCount: number;
-				textBytes: number;
-			};
-			hosts: Array<{
-				client?: {
-					cachedPayloadBytes: number;
-					graphCacheEntryCount: number;
-					indexCacheEntryCount: number;
-					lastGraphEntryCount: number;
-					wasmMemoryBytes: number;
-					pendingRequestCount: number;
-					readModelCacheEntryCount: number;
-					readModel?: NonNullable<
-						PerformanceSnapshot['renderer']['bridgeMetrics'][number]['readModel']
-					>;
-					readySessionCount: number;
-					sessionQueueCount: number;
-				};
-				mode: string;
-				sessions: Array<{
-					passageTextCharacterCount: number;
-					revision: number;
-					sessionId: string;
-					storyIds: string[];
-				}>;
-			}>;
-			workerClients: number;
-		};
-		owners?: {
-			activeEditorCount: number;
-			editorDocumentBytes: number;
-			retainedEditorViewCount: number;
-			retainedLegacyDocumentServiceCount: number;
-			retainedLegacyModeAdapterCount: number;
-			retainedLegacyToolbarDescriptorSetCount: number;
-			retainedLegacyToolbarFacadeCount: number;
-		};
-		heap: {
-			jsHeapSizeLimit?: number;
-			totalJSHeapSize?: number;
-			usedJSHeapSize?: number;
-		};
-		entries: Array<{
-			duration: number;
-			name: string;
-			startTime: number;
-			type: string;
-		}>;
-		events: Array<{
-			detail?: Record<string, unknown>;
-			epochTime: number;
-			name: string;
-			time: number;
-		}>;
-	};
+	renderer: RendererPerformanceSnapshot;
 }
 
 interface RunningApp {
 	app: ElectronApplication;
+	broker: WorkerHeapCdpBroker;
 	launchToWindowMs: number;
 	page: Page;
 	projectPath: string;
@@ -222,6 +128,15 @@ interface RunningApp {
 interface EditStageSample {
 	applyBridgeComputeMs: number;
 	applyBridgeRoundTripMs: number;
+	coreAnalysisMs: number;
+	coreFingerprintMs: number;
+	coreGraphMs: number;
+	coreHistoryMs: number;
+	coreLookupAndDeltaMs: number;
+	coreProjectMutationMs: number;
+	coreReadModelMs: number;
+	corePatchFinalizeMs: number;
+	coreTotalMs: number;
 	index: number;
 	postBridgeMs: number;
 	postPatchMs: number;
@@ -233,6 +148,13 @@ interface EditStageSample {
 	storiesDispatchPersistenceSetupMs: number;
 	storiesDispatchReducerMs: number;
 	storiesDispatchTotalMs: number;
+}
+
+interface RefactorTypingCompositorSettle {
+	frames: number;
+	index: number;
+	pending: number;
+	ready: boolean;
 }
 
 interface RunningEditProfile {
@@ -255,6 +177,7 @@ const phase = process.env.TWINE_PERF_PHASE;
 const runRoot = process.env.TWINE_PERF_RUN_ROOT;
 const launchTracePath = process.env.TWINE_PERF_LAUNCH_TRACE;
 const runId = process.env.TWINE_PERF_RUN_ID;
+const refactorProbeOnly = phase === 'refactor' && smoke && passageCount === 100;
 const watcherTimeout = smoke ? 60_000 : 10 * 60 * 1000;
 const benchmarkPhases = [
 	'diagnostic',
@@ -262,6 +185,7 @@ const benchmarkPhases = [
 	'graph',
 	'memory-detail',
 	'query',
+	'refactor',
 	'startup',
 	'watcher'
 ];
@@ -270,6 +194,14 @@ const mainPath = path.resolve(
 );
 const samples: Record<string, number[]> = {};
 const assertions: Array<{detail?: string; name: string; passed: boolean}> = [];
+const refactorOperations = {
+	refactorCore: 'project-replace',
+	refactorM3PassageReferences: 'passage-references',
+	refactorM3Definition: 'passage-definition',
+	refactorM4DiagnosticFixes: 'diagnostic-fixes',
+	refactorTyping: 'typing-responsiveness',
+	refactorMemory: 'memory-observation'
+} as const;
 const diagnostics: {
 	bridgeMetrics: PerformanceSnapshot['renderer']['bridgeMetrics'];
 	editConfiguration?: {
@@ -288,6 +220,21 @@ const diagnostics: {
 	editStages: EditStageSample[];
 	interaction?: PerformanceSnapshot;
 	memoryDetail?: PerformanceSnapshot;
+	refactor?: {
+		checkpoints: PerformanceSnapshot[];
+		commitSamples: number;
+		detailSamples: number;
+		m4CommitSamples: number;
+		m4DetailSamples: number;
+		m4SummarySamples: number;
+		m4TypingSamples: number;
+		m3DefinitionSamples: number;
+		m3ReferenceSamples: number;
+		operation: 'multi-operation';
+		operations: typeof refactorOperations;
+		summarySamples: number;
+		typingCompositorSettles: RefactorTypingCompositorSettle[];
+	};
 	startup: PerformanceSnapshot[];
 	watcher?: PerformanceSnapshot;
 	watcherAsset?: PerformanceSnapshot;
@@ -446,12 +393,22 @@ async function launchFixture(): Promise<RunningApp> {
 
 	const launchStartedAt = nodePerformance.now();
 	let app: ElectronApplication | undefined;
+	const broker = new WorkerHeapCdpBroker({
+		tracePath: path.join(
+			runRoot ?? root,
+			`worker-heap-broker-${test.info().retry}-${path.basename(root)}.jsonl`
+		),
+		userDataPath: userData
+	});
+	const brokerUrl = await broker.start();
 	const environment = electronEnvironment({
 		NODE_ENV: 'production',
 		TWINE_PERF: '1',
 		TWINE_PERF_LAUNCH_TRACE: launchTracePath,
 		TWINE_PERF_RUN_ID: runId,
-		TWINE_PERF_USER_DATA: userData
+		TWINE_PERF_USER_DATA: userData,
+		TWINE_PERF_WORKER_HEAP_BROKER_TOKEN: broker.token,
+		TWINE_PERF_WORKER_HEAP_BROKER_URL: brokerUrl
 	});
 	const retry = test.info().retry;
 
@@ -514,7 +471,7 @@ async function launchFixture(): Promise<RunningApp> {
 			root
 		});
 
-		return {app, launchToWindowMs, page, projectPath, root};
+		return {app, broker, launchToWindowMs, page, projectPath, root};
 	} catch (error) {
 		let child: ReturnType<ElectronApplication['process']> | undefined;
 		try {
@@ -530,6 +487,7 @@ async function launchFixture(): Promise<RunningApp> {
 			root
 		});
 		await app?.close().catch(() => undefined);
+		await broker.close().catch(() => undefined);
 		if (child?.exitCode === null) {
 			child.kill('SIGKILL');
 		}
@@ -541,6 +499,7 @@ async function launchFixture(): Promise<RunningApp> {
 
 async function closeFixture(running: RunningApp) {
 	const pid = running.app.process().pid;
+	const teardownStartedAt = nodePerformance.now();
 
 	await recordLaunchPhase('close-requested', {
 		pid,
@@ -553,9 +512,17 @@ async function closeFixture(running: RunningApp) {
 			root: running.root
 		});
 	} finally {
+		running.broker.recordLifecycle('page-teardown');
+		await running.broker.close();
 		await rm(running.root, {force: true, recursive: true});
 		await settleLaunchServices();
 	}
+	const teardownMs = nodePerformance.now() - teardownStartedAt;
+	assertInvariant(
+		'worker-heap-broker-teardown-bounded',
+		teardownMs <= 10_000,
+		`${teardownMs.toFixed(1)}ms`
+	);
 }
 
 async function snapshot(page: Page): Promise<PerformanceSnapshot> {
@@ -746,10 +713,9 @@ function correlatedEditStageSample(
 		.filter(
 			metric =>
 				metric.kind === 'apply' &&
-				(metric.mutationStages?.revision === revision ||
-					metric.receivedAtEpochMs <= mutation!.epochTime)
+				metric.mutationStages?.operation === 'localPassageText' &&
+				metric.mutationStages.revision === revision
 		)
-		.sort((left, right) => left.receivedAtEpochMs - right.receivedAtEpochMs)
 		.at(-1);
 	const rendererPatch = current.renderer.events
 		.filter(
@@ -788,6 +754,30 @@ function correlatedEditStageSample(
 		'reducerMs'
 	);
 	const storiesDispatchTotalMs = finiteEventDetail(storiesDispatch, 'totalMs');
+	const coreStages = applyBridge?.mutationStages;
+	const coreStageValues = coreStages
+		? [
+				coreStages.totalMs,
+				coreStages.lookupAndDeltaMs,
+				coreStages.projectMutationMs,
+				coreStages.fingerprintMs,
+				coreStages.graphMs,
+				coreStages.analysisMs,
+				coreStages.readModelMs,
+				coreStages.historyMs,
+				coreStages.patchFinalizeMs
+			]
+		: [];
+	const coreStageSum = coreStages
+		? coreStages.lookupAndDeltaMs +
+			coreStages.projectMutationMs +
+			coreStages.fingerprintMs +
+			coreStages.graphMs +
+			coreStages.analysisMs +
+			coreStages.readModelMs +
+			coreStages.historyMs +
+			coreStages.patchFinalizeMs
+		: undefined;
 	const values = [
 		applyBridge?.computeMs,
 		applyBridge?.roundTripMs,
@@ -797,12 +787,18 @@ function correlatedEditStageSample(
 		rendererPatchTotalMs,
 		storiesDispatchPersistenceSetupMs,
 		storiesDispatchReducerMs,
-		storiesDispatchTotalMs
+		storiesDispatchTotalMs,
+		...coreStageValues
 	];
 
 	if (
 		!applyBridge ||
-		values.some(value => typeof value !== 'number' || !Number.isFinite(value))
+		values.some(
+			value => typeof value !== 'number' || !Number.isFinite(value)
+		) ||
+		coreStageValues.some(value => value < 0) ||
+		coreStageSum === undefined ||
+		coreStageSum > coreStages!.totalMs + 0.25
 	) {
 		return undefined;
 	}
@@ -817,6 +813,15 @@ function correlatedEditStageSample(
 	return {
 		applyBridgeComputeMs: applyBridge.computeMs,
 		applyBridgeRoundTripMs: applyBridge.roundTripMs,
+		coreAnalysisMs: coreStages!.analysisMs,
+		coreFingerprintMs: coreStages!.fingerprintMs,
+		coreGraphMs: coreStages!.graphMs,
+		coreHistoryMs: coreStages!.historyMs,
+		coreLookupAndDeltaMs: coreStages!.lookupAndDeltaMs,
+		coreProjectMutationMs: coreStages!.projectMutationMs,
+		coreReadModelMs: coreStages!.readModelMs,
+		corePatchFinalizeMs: coreStages!.patchFinalizeMs,
+		coreTotalMs: coreStages!.totalMs,
 		index,
 		postBridgeMs,
 		postPatchMs,
@@ -835,6 +840,15 @@ function recordEditStageSample(sample: EditStageSample) {
 	diagnostics.editStages.push(sample);
 	addSample('edit.applyBridge.computeMs', sample.applyBridgeComputeMs);
 	addSample('edit.applyBridge.roundTripMs', sample.applyBridgeRoundTripMs);
+	addSample('edit.core.totalMs', sample.coreTotalMs);
+	addSample('edit.core.lookupAndDeltaMs', sample.coreLookupAndDeltaMs);
+	addSample('edit.core.projectMutationMs', sample.coreProjectMutationMs);
+	addSample('edit.core.fingerprintMs', sample.coreFingerprintMs);
+	addSample('edit.core.graphMs', sample.coreGraphMs);
+	addSample('edit.core.analysisMs', sample.coreAnalysisMs);
+	addSample('edit.core.readModelMs', sample.coreReadModelMs);
+	addSample('edit.core.historyMs', sample.coreHistoryMs);
+	addSample('edit.core.patchFinalizeMs', sample.corePatchFinalizeMs);
 	addSample('edit.postBridgeMs', sample.postBridgeMs);
 	addSample(
 		'edit.rendererPatch.classificationMs',
@@ -1145,14 +1159,13 @@ function startupMetrics(
 	);
 	const baselineMemory = memoryCheckpoints.get('open-start');
 	const baselineByRole = baselineMemory
-		? processWorkingSetByRole(baselineMemory.appMetrics)
+		? checkpointWorkingSetByRole(baselineMemory)
 		: new Map<string, number>();
 
 	for (const checkpoint of memoryCheckpoints.values()) {
-		const workingSetKiB = checkpoint.appMetrics.reduce(
-			(total, metric) => total + (metric.memory?.workingSetSize ?? 0),
-			0
-		);
+		const workingSetKiB = [
+			...Object.values(checkpoint.processWorkingSetKiBByRole)
+		].reduce((total, value) => total + value, 0);
 
 		addSample(
 			`startupMemory.${checkpoint.name}.residentMiB`,
@@ -1160,8 +1173,8 @@ function startupMetrics(
 				? workingSetKiB / 1024
 				: checkpoint.mainMemory.rss / 1024 / 1024
 		);
-		for (const [role, workingSetKiB] of processWorkingSetByRole(
-			checkpoint.appMetrics
+		for (const [role, workingSetKiB] of checkpointWorkingSetByRole(
+			checkpoint
 		)) {
 			addSample(
 				`startupMemory.${checkpoint.name}.process.${role.toLowerCase()}MiB`,
@@ -1302,6 +1315,12 @@ function processWorkingSetByRole(
 	return result;
 }
 
+function checkpointWorkingSetByRole(
+	checkpoint: PerformanceSnapshot['main']['memoryCheckpoints'][number]
+) {
+	return new Map(Object.entries(checkpoint.processWorkingSetKiBByRole));
+}
+
 async function waitForEvent(
 	page: Page,
 	name: string,
@@ -1399,6 +1418,170 @@ async function waitForMeasure(page: Page, name: string) {
 				.some(entry => entry.entryType === 'measure'),
 		name,
 		{timeout: 60_000}
+	);
+}
+
+async function waitForMutationPaintAfter(page: Page, inputStartedAt: number) {
+	await page.waitForFunction(
+		startedAt =>
+			performance
+				.getEntriesByName('twine:mutation-to-paint')
+				.some(
+					entry =>
+						entry.entryType === 'measure' &&
+						entry.startTime >= startedAt &&
+						entry.startTime + entry.duration >= startedAt
+				),
+		inputStartedAt,
+		{timeout: 60_000}
+	);
+
+	return page.evaluate(startedAt => {
+		const entry = performance
+			.getEntriesByName('twine:mutation-to-paint')
+			.filter(
+				candidate =>
+					candidate.entryType === 'measure' &&
+					candidate.startTime >= startedAt &&
+					candidate.startTime + candidate.duration >= startedAt
+			)
+			.at(-1);
+
+		return entry
+			? {
+					duration: entry.duration,
+					name: entry.name,
+					startTime: entry.startTime,
+					type: entry.entryType
+				}
+			: undefined;
+	}, inputStartedAt);
+}
+
+async function waitForMutationPaintForRevision(
+	page: Page,
+	{inputStartedAt, revision}: {inputStartedAt: number; revision: number}
+) {
+	const mutationSnapshot = await waitForRevisionEvent(
+		page,
+		['mutation-applied'],
+		revision
+	);
+	const mutations = mutationSnapshot.renderer.events.filter(
+		event =>
+			event.name === 'mutation-applied' && event.detail?.revision === revision
+	);
+	if (mutations.length !== 1) {
+		throw new Error(
+			`Expected one mutation event for revision ${revision}, found ${mutations.length}.`
+		);
+	}
+	const mutation = mutations[0];
+	const token = mutation?.detail?.performanceToken;
+
+	if (typeof token !== 'string' || token.length === 0) {
+		throw new Error(
+			`Mutation revision ${revision} did not expose a scoped paint token.`
+		);
+	}
+
+	const measureName = `mutation-to-paint-${token}`;
+	const submitName = `mutation-submit-${token}`;
+	const workerResponseName = `mutation-worker-response-${token}`;
+	const patchDispatchName = `mutation-patch-dispatch-${token}`;
+	await page.waitForFunction(
+		({
+			measureName,
+			patchDispatchName,
+			startedAt,
+			submitName,
+			workerResponseName
+		}) =>
+			performance
+				.getEntriesByName(`twine:${measureName}`)
+				.some(
+					entry => entry.entryType === 'measure' && entry.startTime >= startedAt
+				) &&
+			[submitName, workerResponseName, patchDispatchName].every(name =>
+				performance
+					.getEntriesByName(`twine:${name}`)
+					.some(entry => entry.entryType === 'mark')
+			),
+		{
+			measureName,
+			patchDispatchName,
+			startedAt: inputStartedAt,
+			submitName,
+			workerResponseName
+		},
+		{timeout: 60_000}
+	);
+
+	return page.evaluate(
+		({
+			measureName,
+			patchDispatchName,
+			startedAt,
+			submitName,
+			workerResponseName
+		}) => {
+			const exactlyOne = (name: string, type: string) => {
+				const entries = performance
+					.getEntriesByName(`twine:${name}`)
+					.filter(entry => entry.entryType === type);
+				if (entries.length !== 1) {
+					throw new Error(
+						`Expected one ${type} entry for ${name}, found ${entries.length}.`
+					);
+				}
+				return entries[0];
+			};
+			const paint = exactlyOne(measureName, 'measure');
+			const submit = exactlyOne(submitName, 'mark');
+			const workerResponse = exactlyOne(workerResponseName, 'mark');
+			const patchDispatch = exactlyOne(patchDispatchName, 'mark');
+
+			if (paint.startTime < startedAt) {
+				throw new Error(
+					`Scoped paint measure ${measureName} predates its input.`
+				);
+			}
+			const paintEnd = paint.startTime + paint.duration;
+			const result = {
+				paint: {
+					duration: paint.duration,
+					name: paint.name,
+					startTime: paint.startTime,
+					type: paint.entryType
+				},
+				stages: {
+					frameWaitMs: paintEnd - patchDispatch.startTime,
+					patchDispatchMs: patchDispatch.startTime - workerResponse.startTime,
+					totalMs: paint.duration,
+					workerMs: workerResponse.startTime - submit.startTime
+				}
+			};
+
+			// Keep the token-scoped diagnostic artifacts bounded across all 20
+			// planning windows. The generic product metrics remain unchanged.
+			performance.clearMeasures(`twine:${measureName}`);
+			for (const name of [
+				submitName,
+				workerResponseName,
+				patchDispatchName,
+				`${measureName}-end`
+			]) {
+				performance.clearMarks(`twine:${name}`);
+			}
+			return result;
+		},
+		{
+			measureName,
+			patchDispatchName,
+			startedAt: inputStartedAt,
+			submitName,
+			workerResponseName
+		}
 	);
 }
 
@@ -1956,6 +2139,15 @@ async function measureEdits(page: Page) {
 	const editStageSampleNames = [
 		'edit.applyBridge.computeMs',
 		'edit.applyBridge.roundTripMs',
+		'edit.core.totalMs',
+		'edit.core.lookupAndDeltaMs',
+		'edit.core.projectMutationMs',
+		'edit.core.fingerprintMs',
+		'edit.core.graphMs',
+		'edit.core.analysisMs',
+		'edit.core.readModelMs',
+		'edit.core.historyMs',
+		'edit.core.patchFinalizeMs',
 		'edit.postBridgeMs',
 		'edit.rendererPatch.classificationMs',
 		'edit.rendererPatch.dispatchMs',
@@ -3676,10 +3868,21 @@ function captureMemory(current: PerformanceSnapshot, prefix = 'memory') {
 			? undefined
 			: current.main.memory.external / mib;
 	const client = current.renderer.core.hosts[0]?.client;
+	const workerHeapCheckpoint = [...current.main.memoryCheckpoints].sort(
+		(left, right) => right.recordedAtEpochMs - left.recordedAtEpochMs
+	)[0];
 	const workerWasmMiB =
-		client?.wasmMemoryBytes === undefined
+		typeof workerHeapCheckpoint?.renderer.workerWasmMemoryBytes !== 'number'
 			? undefined
-			: client.wasmMemoryBytes / mib;
+			: workerHeapCheckpoint.renderer.workerWasmMemoryBytes / mib;
+	const workerCdpHeapMiB =
+		typeof workerHeapCheckpoint?.renderer.workerHeapCdpUsedBytes !== 'number'
+			? undefined
+			: workerHeapCheckpoint.renderer.workerHeapCdpUsedBytes / mib;
+	const workerSelfReportedHeapMiB =
+		client?.workerMemoryObservation?.workerJsHeapUsedBytes === undefined
+			? undefined
+			: client.workerMemoryObservation.workerJsHeapUsedBytes / mib;
 	const mainPrivateMiB = current.main.processMemory?.private
 		? current.main.processMemory.private / 1024
 		: undefined;
@@ -3695,11 +3898,13 @@ function captureMemory(current: PerformanceSnapshot, prefix = 'memory') {
 		mainHeapUsedMiB,
 		mainExternalMiB,
 		rendererHeapUsedMiB,
+		workerCdpHeapMiB,
 		workerWasmMiB
 	].every(value => value !== undefined)
 		? mainHeapUsedMiB! +
 			mainExternalMiB! +
 			rendererHeapUsedMiB! +
+			workerCdpHeapMiB! +
 			workerWasmMiB!
 		: undefined;
 
@@ -3735,6 +3940,21 @@ function captureMemory(current: PerformanceSnapshot, prefix = 'memory') {
 		metric(`process.${type.toLowerCase()}MiB`, processMiB(type));
 	}
 	metric('heap.rendererUsedMiB', rendererHeapUsedMiB);
+	metric('heap.workerCdpUsedMiB', workerCdpHeapMiB);
+	metric('heap.workerSelfReportedUsedMiB', workerSelfReportedHeapMiB);
+	metric(
+		'heap.workerCdpTotalMiB',
+		typeof workerHeapCheckpoint?.renderer.workerHeapCdpTotalSize === 'number'
+			? workerHeapCheckpoint.renderer.workerHeapCdpTotalSize / mib
+			: undefined
+	);
+	metric(
+		'heap.workerCdpResponseDriftMs',
+		typeof workerHeapCheckpoint?.renderer.workerHeapCdpResponseDriftMs ===
+			'number'
+			? workerHeapCheckpoint.renderer.workerHeapCdpResponseDriftMs
+			: undefined
+	);
 	metric(
 		'heap.rendererTotalMiB',
 		current.renderer.heap.totalJSHeapSize === undefined
@@ -3756,11 +3976,18 @@ function captureMemory(current: PerformanceSnapshot, prefix = 'memory') {
 			: current.main.memory.arrayBuffers / mib
 	);
 	metric(
-		'residual.rendererAfterHeapAndWasmMiB',
+		'residual.rendererAfterHeapWorkerJsAndWasmMiB',
 		rendererWorkingSetMiB !== undefined &&
 			rendererHeapUsedMiB !== undefined &&
+			workerCdpHeapMiB !== undefined &&
 			workerWasmMiB !== undefined
-			? Math.max(0, rendererWorkingSetMiB - rendererHeapUsedMiB - workerWasmMiB)
+			? Math.max(
+					0,
+					rendererWorkingSetMiB -
+						rendererHeapUsedMiB -
+						workerCdpHeapMiB -
+						workerWasmMiB
+				)
 			: undefined
 	);
 	metric(
@@ -3772,11 +3999,18 @@ function captureMemory(current: PerformanceSnapshot, prefix = 'memory') {
 			: undefined
 	);
 	metric(
-		'residual.rendererPrivateAfterHeapAndWasmMiB',
+		'residual.rendererPrivateAfterHeapWorkerJsAndWasmMiB',
 		rendererPrivateMiB !== undefined &&
 			rendererHeapUsedMiB !== undefined &&
+			workerCdpHeapMiB !== undefined &&
 			workerWasmMiB !== undefined
-			? Math.max(0, rendererPrivateMiB - rendererHeapUsedMiB - workerWasmMiB)
+			? Math.max(
+					0,
+					rendererPrivateMiB -
+						rendererHeapUsedMiB -
+						workerCdpHeapMiB -
+						workerWasmMiB
+				)
 			: undefined
 	);
 	metric(
@@ -3817,6 +4051,8 @@ function captureMemory(current: PerformanceSnapshot, prefix = 'memory') {
 			: current.renderer.core.bootstrap.textBytes / mib
 	);
 	metric('owner.workerWasmLinearMiB', workerWasmMiB);
+	metric('owner.workerCdpHeapUsedMiB', workerCdpHeapMiB);
+	metric('owner.workerSelfReportedHeapUsedMiB', workerSelfReportedHeapMiB);
 	metric(
 		'owner.workerCachedPayloadMiB',
 		client ? client.cachedPayloadBytes / mib : undefined
@@ -3875,6 +4111,7 @@ async function recordMemoryDetailCheckpoint(
 	name: string,
 	retained = false
 ) {
+	const startedAt = nodePerformance.now();
 	await page.evaluate(
 		async ({checkpointName, collectRetained}) => {
 			const harness = (window as any).twinePerformance;
@@ -3887,6 +4124,2215 @@ async function recordMemoryDetailCheckpoint(
 		},
 		{checkpointName: name, collectRetained: retained}
 	);
+	return nodePerformance.now() - startedAt;
+}
+
+interface RefactorFixtureTarget {
+	afterName: string;
+	beforeName: string;
+	passageId: string;
+	storyId: string;
+}
+
+interface M3QueryFixtureTarget {
+	definitionNames: string[];
+	passageId: string;
+	passageName: string;
+	storyId: string;
+}
+
+interface M4DiagnosticFixFixtureTarget {
+	expectedChangeCount: number;
+	selection: 'allSafe';
+	storyId: string;
+}
+
+function recordM3BridgeSample(
+	prefix: string,
+	metric: {computeMs: number; responseBytes: number; roundTripMs: number}
+) {
+	addSample(`${prefix}ComputeMs`, metric.computeMs);
+	addSample(`${prefix}ResponseBytes`, metric.responseBytes);
+	addSample(`${prefix}RoundTripMs`, metric.roundTripMs);
+}
+
+async function measureM3Queries(page: Page, target: M3QueryFixtureTarget) {
+	const before = await snapshot(page);
+	const baselineReadModel = before.renderer.core.hosts[0]?.client?.readModel;
+	const expectedBacklinkScanCount =
+		(baselineReadModel?.backlinkScanCount ?? 0) + 1;
+	const expectedBacklinkScannedSourceCount =
+		(baselineReadModel?.backlinkScannedSourceCount ?? 0) + passageCount;
+	const first = await page.evaluate(
+		async target =>
+			(window as any).twinePerformance.queries.passageReferences(
+				target.storyId,
+				target.passageId,
+				{cursor: null, limit: 50}
+			),
+		target
+	);
+	recordM3BridgeSample('refactor.m3.referencesCold', first.metric);
+	assertInvariant(
+		'refactor-m3-references-cold-page-bounded',
+		first.result.storyId === target.storyId &&
+			first.result.passageId === target.passageId &&
+			first.result.coverage === 'standard-links-only' &&
+			first.result.totalCount === passageCount &&
+			first.result.references.length === 50 &&
+			first.result.nextCursor !== null &&
+			new Set(
+				first.result.references.map(
+					(reference: any) => reference.location.resultKey
+				)
+			).size === first.result.references.length &&
+			first.metric.responseBytes <= 64 * 1024,
+		JSON.stringify(first)
+	);
+	assertInvariant(
+		'refactor-m3-references-cold-scans-once-without-full-indexes',
+		first.metric.kind === 'queryPassageReferencesPage' &&
+			first.metric.readModel?.backlinkScanCount === expectedBacklinkScanCount &&
+			first.metric.readModel.backlinkScannedSourceCount ===
+				expectedBacklinkScannedSourceCount &&
+			first.metric.readModel.graphCacheStoryCount === 0 &&
+			first.metric.readModel.readModelCacheStoryCount === 0,
+		JSON.stringify(first.metric.readModel)
+	);
+
+	const second = await page.evaluate(
+		async ({cursor, target}) =>
+			(window as any).twinePerformance.queries.passageReferences(
+				target.storyId,
+				target.passageId,
+				{cursor, limit: 50}
+			),
+		{cursor: first.result.nextCursor, target}
+	);
+	const firstKeys = new Set(
+		first.result.references.map(
+			(reference: any) => reference.location.resultKey
+		)
+	);
+	assertInvariant(
+		'refactor-m3-references-next-page-reuses-scan',
+		second.result.references.length === 50 &&
+			second.result.nextCursor !== first.result.nextCursor &&
+			second.result.references.every(
+				(reference: any) => !firstKeys.has(reference.location.resultKey)
+			) &&
+			second.metric.readModel?.backlinkScanCount ===
+				expectedBacklinkScanCount &&
+			(second.metric.readModel.backlinkCacheHitCount ?? 0) >= 1,
+		JSON.stringify(second)
+	);
+
+	for (let index = 0; index < 20; index++) {
+		const references = await page.evaluate(
+			async ({index, target}) =>
+				(window as any).twinePerformance.queries.passageReferences(
+					target.storyId,
+					target.passageId,
+					{cursor: null, limit: 51 + index}
+				),
+			{index, target}
+		);
+		assertInvariant(
+			`refactor-m3-references-warm-${index}-bounded`,
+			references.result.references.length === 51 + index &&
+				references.result.totalCount === passageCount &&
+				references.metric.readModel?.backlinkScanCount ===
+					expectedBacklinkScanCount &&
+				references.metric.responseBytes <= 96 * 1024,
+			JSON.stringify(references)
+		);
+		recordM3BridgeSample('refactor.m3.referencesWarm', references.metric);
+
+		const definition = await page.evaluate(
+			async ({expectedRevision, index, target}) =>
+				(window as any).twinePerformance.queries.definition({
+					expectedRevision,
+					name: target.definitionNames[index],
+					storyId: target.storyId,
+					symbolKind: 'passage'
+				}),
+			{expectedRevision: first.result.revision, index, target}
+		);
+		assertInvariant(
+			`refactor-m3-definition-${index}-unique-bounded`,
+			definition.result.type === 'unique' &&
+				definition.result.location.passageName ===
+					target.definitionNames[index] &&
+				definition.result.location.revision === first.result.revision &&
+				definition.metric.kind === 'queryDefinition' &&
+				definition.metric.responseBytes <= 16 * 1024,
+			JSON.stringify(definition)
+		);
+		recordM3BridgeSample('refactor.m3.definition', definition.metric);
+	}
+
+	const after = await snapshot(page);
+	const client = after.renderer.core.hosts[0]?.client;
+	assertInvariant(
+		'refactor-m3-queries-stay-worker-owned-and-idle',
+		after.renderer.core.hosts[0]?.mode === 'wasm-worker' &&
+			after.renderer.core.workerClients === 1 &&
+			after.renderer.core.activeSessions === 1 &&
+			client?.pendingRequestCount === 0 &&
+			client.sessionQueueCount === 0 &&
+			client.readModel?.graphCacheStoryCount === 0 &&
+			client.readModel.readModelCacheStoryCount === 0 &&
+			client.readModel.backlinkScanCount === expectedBacklinkScanCount &&
+			client.readModel.backlinkScannedSourceCount ===
+				expectedBacklinkScannedSourceCount,
+		JSON.stringify(client)
+	);
+	assertInvariant(
+		'refactor-m3-query-samples-complete',
+		(samples['refactor.m3.referencesWarmComputeMs']?.length ?? 0) === 20 &&
+			(samples['refactor.m3.definitionComputeMs']?.length ?? 0) === 20
+	);
+}
+
+async function measureM4DiagnosticFixes(
+	page: Page,
+	target: M4DiagnosticFixFixtureTarget
+) {
+	const warmups = 3;
+	const measured = 20;
+	await startEditLongTaskObservation(page);
+	await page
+		.getByRole('group', {name: 'Workspace Mode'})
+		.getByRole('tab', {name: 'Text'})
+		.click();
+	const content = page
+		.locator('.story-edit-editor-window')
+		.first()
+		.locator('[data-testid^="story-editor-window-"]')
+		.first()
+		.locator('.cm-content');
+	await expect(content).toBeVisible({timeout: 60_000});
+	// Establish an operation-local baseline from a current worker response in a
+	// fresh M4 fixture session. This prevents earlier refactor workloads or a
+	// stale response tuple from becoming the comparator.
+	await page.evaluate(
+		storyId => (window as any).twinePerformance.worker.diagnostics(storyId),
+		target.storyId
+	);
+	await recordMemoryDetailCheckpoint(
+		page,
+		'refactor-m4-all-safe-response-boundary-baseline'
+	);
+	const memoryBaseline = await snapshot(page);
+	const refactorDiagnostics = diagnostics.refactor;
+	if (!refactorDiagnostics) {
+		throw new Error(
+			'M4 diagnostics require the completed core refactor phase.'
+		);
+	}
+	refactorDiagnostics.checkpoints.push(memoryBaseline);
+	const baselineCheckpoint = memoryBaseline.main.memoryCheckpoints.find(
+		checkpoint =>
+			checkpoint.name === 'refactor-m4-all-safe-response-boundary-baseline'
+	);
+	assertInvariant(
+		'refactor-m4-all-safe-response-boundary-baseline-current-coherent',
+		baselineCheckpoint?.sampleCount === 1 &&
+			baselineCheckpoint.ownedHighWater.sampleCount === 1 &&
+			typeof baselineCheckpoint.ownedHighWater.totalBytes === 'number' &&
+			typeof baselineCheckpoint.ownedHighWater.wasmBytes === 'number' &&
+			typeof baselineCheckpoint.ownedHighWater.workerCdpUsedBytes ===
+				'number' &&
+			typeof baselineCheckpoint.ownedHighWater.workerResponseAtEpochMs ===
+				'number' &&
+			typeof baselineCheckpoint.ownedHighWater.workerCdpSampledAtEpochMs ===
+				'number' &&
+			typeof baselineCheckpoint.renderer.workerResponseAtEpochMs === 'number' &&
+			typeof baselineCheckpoint.renderer.workerHeapCdpSampledAtEpochMs ===
+				'number',
+		JSON.stringify(baselineCheckpoint)
+	);
+	let maxPlanStoreBytes = 0;
+
+	for (let index = 0; index < warmups + measured; index++) {
+		await content.click();
+		await page.keyboard.press('End');
+		const beforeRevision = await currentRevision(page);
+		await page.evaluate(
+			({index, target, warmups}) => {
+				const harness = (window as any).twinePerformance;
+				const probe = {
+					active: true,
+					activeBeforeInput: false,
+					checkpointOutcome: undefined as Promise<{error?: string}> | undefined,
+					editorInputDispatched: false,
+					inputStartedAt: undefined as number | undefined,
+					promise: undefined as Promise<unknown> | undefined,
+					startedAt: performance.now()
+				};
+				(window as any).__twineM4PlanProbe = probe;
+				let workerMetric: any;
+				const request = {
+					selection: {excludedDiagnosticIds: [], type: target.selection},
+					storyId: target.storyId
+				};
+				const options = {
+					onPlanningStarted: () => {
+						queueMicrotask(() => {
+							const editor = document.querySelector<HTMLElement>(
+								'.story-edit-editor-window [data-testid^="story-editor-window-"] .cm-content'
+							);
+							probe.activeBeforeInput = probe.active;
+							probe.inputStartedAt = performance.now();
+							editor?.focus();
+							probe.editorInputDispatched = Boolean(
+								editor &&
+								document.execCommand(
+									'insertText',
+									false,
+									` m4-all-safe-typing-${target.expectedChangeCount}`
+								)
+							);
+						});
+					},
+					onWorkerMetric: (metric: any) => (workerMetric = metric)
+				};
+				const operation =
+					index >= warmups
+						? harness.refactor.planDiagnosticFixesObserved(
+								target.storyId,
+								request,
+								'refactor-m4-all-safe-plan-response-boundary',
+								options
+							)
+						: {
+								result: harness.refactor.planDiagnosticFixes(
+									target.storyId,
+									request,
+									options
+								),
+								workerResponseCheckpoint: Promise.resolve()
+							};
+				probe.checkpointOutcome = operation.workerResponseCheckpoint.then(
+					() => ({}),
+					(error: unknown) => ({error: String(error)})
+				);
+				probe.promise = operation.result
+					.then((result: any) => ({
+						activeBeforeInput: probe.activeBeforeInput,
+						durationMs: performance.now() - probe.startedAt,
+						editorInputDispatched: probe.editorInputDispatched,
+						finishedAt: performance.now(),
+						inputStartedAt: probe.inputStartedAt,
+						result,
+						serializedBytes: new TextEncoder().encode(JSON.stringify(result))
+							.byteLength,
+						workerMetric
+					}))
+					.finally(() => {
+						probe.active = false;
+					});
+			},
+			{index, target, warmups}
+		);
+		await page.waitForFunction(
+			() =>
+				typeof (window as any).__twineM4PlanProbe?.inputStartedAt === 'number',
+			undefined,
+			{timeout: 60_000}
+		);
+		const revision = await waitForRevisionAfter(page, beforeRevision);
+		const inputStartedAt = await page.evaluate(
+			() => (window as any).__twineM4PlanProbe.inputStartedAt as number
+		);
+		const editTiming = await waitForMutationPaintForRevision(page, {
+			inputStartedAt,
+			revision
+		});
+		const planned = await page.evaluate(async () => {
+			const probe = (window as any).__twineM4PlanProbe;
+			return probe.promise;
+		});
+		const checkpointOutcome = await page.evaluate(async () => {
+			const probe = (window as any).__twineM4PlanProbe;
+			const outcome = await probe.checkpointOutcome;
+			delete (window as any).__twineM4PlanProbe;
+			return outcome;
+		});
+		if (checkpointOutcome.error) {
+			throw new Error(checkpointOutcome.error);
+		}
+		const longTasks = await mutationWindowLongTasks(page, {
+			duration: planned.durationMs,
+			startTime: planned.finishedAt - planned.durationMs
+		});
+		addSample(
+			'refactor.m4.allSafe.longTaskMs',
+			Math.max(0, ...longTasks.map(task => task.duration))
+		);
+		assertInvariant(
+			`refactor-m4-all-safe-plan-${index}-complete-bounded`,
+			planned.activeBeforeInput &&
+				planned.editorInputDispatched &&
+				planned.result.type === 'complete' &&
+				planned.result.summary.operationKind === 'diagnostic-fixes' &&
+				planned.result.summary.coverage === 'deterministic-safe-fixes' &&
+				planned.result.summary.changeCount === target.expectedChangeCount &&
+				planned.serializedBytes <= 64 * 1024 &&
+				planned.workerMetric?.kind === 'planDiagnosticFixes' &&
+				typeof planned.workerMetric.rustStartedAtEpochMs === 'number' &&
+				typeof planned.workerMetric.rustFinishedAtEpochMs === 'number',
+			JSON.stringify(planned)
+		);
+		assertInvariant(
+			`refactor-m4-all-safe-typing-${index}-measured-during-plan`,
+			planned.finishedAt >= inputStartedAt && revision === beforeRevision + 1,
+			JSON.stringify({
+				beforeRevision,
+				finishedAt: planned.finishedAt,
+				inputStartedAt,
+				revision
+			})
+		);
+		for (const task of longTasks) {
+			assertInvariant(
+				`refactor-m4-all-safe-plan-${index}-long-task-limit`,
+				task.duration <= 50,
+				`${task.duration.toFixed(2)}ms`
+			);
+		}
+		if (index >= warmups) {
+			addSample('refactor.m4.allSafe.planMs', planned.durationMs);
+			addSample('refactor.m4.allSafe.summaryBytes', planned.serializedBytes);
+			addSample('refactor.m4.allSafe.editPaintMs', editTiming.paint.duration);
+		}
+		await page.evaluate(
+			storyId => (window as any).twinePerformance.review.closeReview(storyId),
+			target.storyId
+		);
+		const undo = page.getByRole('button', {name: /^Undo/});
+		await expect(undo).toBeEnabled();
+		await undo.click();
+		const undoRevision = await waitForRevisionAfter(page, revision);
+		await waitForRevisionEvent(page, ['undo-applied'], undoRevision);
+		await waitForPersistenceIdle(page);
+	}
+
+	const postPlan = await snapshot(page);
+	refactorDiagnostics.checkpoints.push(postPlan);
+	const postPlanStore = refactorStoreSnapshot(postPlan);
+	maxPlanStoreBytes = Math.max(
+		maxPlanStoreBytes,
+		postPlanStore?.refactorPlanStoreBytes ?? 0
+	);
+	const planResponseBoundary = postPlan.main.memoryCheckpoints.find(
+		checkpoint =>
+			checkpoint.name === 'refactor-m4-all-safe-plan-response-boundary'
+	);
+	assertInvariant(
+		'refactor-m4-all-safe-plan-response-boundary-retained',
+		planResponseBoundary?.sampleCount === measured &&
+			planResponseBoundary.ownedHighWater.sampleCount >= 1 &&
+			planResponseBoundary.ownedHighWater.sampleCount <= measured &&
+			typeof planResponseBoundary.ownedHighWater.totalBytes === 'number' &&
+			typeof planResponseBoundary.ownedHighWater.wasmBytes === 'number' &&
+			typeof planResponseBoundary.ownedHighWater.workerCdpUsedBytes ===
+				'number' &&
+			typeof planResponseBoundary.ownedHighWater.workerResponseAtEpochMs ===
+				'number' &&
+			typeof planResponseBoundary.ownedHighWater.workerCdpSampledAtEpochMs ===
+				'number',
+		JSON.stringify(planResponseBoundary)
+	);
+
+	await page.evaluate(
+		storyId => (window as any).twinePerformance.review.closeReview(storyId),
+		target.storyId
+	);
+	const heapBeforeDetail = await page.evaluate(() =>
+		(window as any).twinePerformance.rendererHeapAfterGarbageCollection()
+	);
+	const detailPlan = await page.evaluate(async target => {
+		const harness = (window as any).twinePerformance;
+		return harness.refactor.planDiagnosticFixes(target.storyId, {
+			selection: {excludedDiagnosticIds: [], type: target.selection},
+			storyId: target.storyId
+		});
+	}, target);
+	assertInvariant(
+		'refactor-m4-all-safe-detail-plan-complete',
+		detailPlan.type === 'complete' &&
+			detailPlan.summary.changeCount === target.expectedChangeCount,
+		JSON.stringify(detailPlan)
+	);
+	if (detailPlan.type === 'complete') {
+		for (let index = 0; index < warmups + measured; index++) {
+			const detail = await page.evaluate(
+				async ({cursor, measuredSample, storyId}) => {
+					const harness = (window as any).twinePerformance;
+					const startedAt = performance.now();
+					const operation = measuredSample
+						? harness.refactor.detailObserved(
+								storyId,
+								cursor,
+								'refactor-m4-all-safe-detail-response-boundary'
+							)
+						: {
+								result: harness.refactor.detail(storyId, cursor),
+								workerResponseCheckpoint: Promise.resolve()
+							};
+					const result = await operation.result;
+					const durationMs = performance.now() - startedAt;
+					const checkpointError = await operation.workerResponseCheckpoint.then(
+						() => undefined,
+						(error: unknown) => String(error)
+					);
+					return {
+						checkpointError,
+						durationMs,
+						result,
+						serializedBytes: new TextEncoder().encode(JSON.stringify(result))
+							.byteLength
+					};
+				},
+				{
+					cursor: detailPlan.summary.firstDetailCursor,
+					measuredSample: index >= warmups,
+					storyId: target.storyId
+				}
+			);
+			if (detail.checkpointError) throw new Error(detail.checkpointError);
+			assertInvariant(
+				`refactor-m4-all-safe-detail-${index}-canonical-bounded`,
+				detail.result.type === 'page' &&
+					detail.result.page.changes.length > 0 &&
+					detail.result.page.changes.length <= 200 &&
+					detail.result.page.changes.every(
+						(change: any) => change.kind === 'add-passage'
+					) &&
+					detail.serializedBytes <= 256 * 1024,
+				JSON.stringify(detail)
+			);
+			if (index >= warmups) {
+				addSample('refactor.m4.allSafe.detailPageMs', detail.durationMs);
+				addSample(
+					'refactor.m4.allSafe.detailPageBytes',
+					detail.serializedBytes
+				);
+			}
+		}
+	}
+	const postDetail = await snapshot(page);
+	refactorDiagnostics.checkpoints.push(postDetail);
+	const postDetailStore = refactorStoreSnapshot(postDetail);
+	maxPlanStoreBytes = Math.max(
+		maxPlanStoreBytes,
+		postDetailStore?.refactorPlanStoreBytes ?? 0
+	);
+	const detailResponseBoundary = postDetail.main.memoryCheckpoints.find(
+		checkpoint =>
+			checkpoint.name === 'refactor-m4-all-safe-detail-response-boundary'
+	);
+	assertInvariant(
+		'refactor-m4-all-safe-detail-response-boundary-retained',
+		detailResponseBoundary?.sampleCount === measured &&
+			detailResponseBoundary.ownedHighWater.sampleCount >= 1 &&
+			detailResponseBoundary.ownedHighWater.sampleCount <= measured &&
+			typeof detailResponseBoundary.ownedHighWater.totalBytes === 'number' &&
+			typeof detailResponseBoundary.ownedHighWater.wasmBytes === 'number' &&
+			typeof detailResponseBoundary.ownedHighWater.workerCdpUsedBytes ===
+				'number' &&
+			typeof detailResponseBoundary.ownedHighWater.workerResponseAtEpochMs ===
+				'number' &&
+			typeof detailResponseBoundary.ownedHighWater.workerCdpSampledAtEpochMs ===
+				'number',
+		JSON.stringify(detailResponseBoundary)
+	);
+	const baselineResponseBoundaryBytes =
+		baselineCheckpoint?.ownedHighWater.totalBytes;
+	const maxResponseBoundaryBytes = Math.max(
+		planResponseBoundary?.ownedHighWater.totalBytes ?? Number.NaN,
+		detailResponseBoundary?.ownedHighWater.totalBytes ?? Number.NaN
+	);
+	addSample(
+		'refactor.m4.allSafe.responseBoundaryIncrementalMemoryMiB',
+		typeof baselineResponseBoundaryBytes !== 'number' ||
+			!Number.isFinite(maxResponseBoundaryBytes)
+			? undefined
+			: Math.max(0, maxResponseBoundaryBytes - baselineResponseBoundaryBytes) /
+					(1024 * 1024)
+	);
+	addSample(
+		'refactor.m4.allSafe.planStoreMiB',
+		maxPlanStoreBytes / (1024 * 1024)
+	);
+	await page.evaluate(
+		storyId => (window as any).twinePerformance.review.closeReview(storyId),
+		target.storyId
+	);
+	const heapAfterClose = await page.evaluate(() =>
+		(window as any).twinePerformance.rendererHeapAfterGarbageCollection()
+	);
+	addSample(
+		'refactor.m4.allSafe.retainedFrontendMiB',
+		Math.max(
+			0,
+			(heapAfterClose.usedJSHeapSize - heapBeforeDetail.usedJSHeapSize) /
+				1024 /
+				1024
+		)
+	);
+	const detailBridgeMetric = (await snapshot(page)).renderer.bridgeMetrics
+		.filter(metric => metric.kind === 'queryRefactorPlanDetail')
+		.at(-1);
+	assertInvariant(
+		'refactor-m4-detail-worker-operation-observed',
+		detailBridgeMetric?.kind === 'queryRefactorPlanDetail' &&
+			typeof detailBridgeMetric.rustStartedAtEpochMs === 'number' &&
+			typeof detailBridgeMetric.rustFinishedAtEpochMs === 'number',
+		JSON.stringify(detailBridgeMetric)
+	);
+	assertInvariant(
+		'refactor-m4-all-safe-measured-samples-complete',
+		[
+			'refactor.m4.allSafe.planMs',
+			'refactor.m4.allSafe.summaryBytes',
+			'refactor.m4.allSafe.detailPageMs',
+			'refactor.m4.allSafe.detailPageBytes',
+			'refactor.m4.allSafe.editPaintMs'
+		].every(name => (samples[name]?.length ?? 0) === measured),
+		JSON.stringify(
+			Object.fromEntries(
+				Object.entries(samples).filter(([name]) =>
+					name.startsWith('refactor.m4')
+				)
+			)
+		)
+	);
+	assertInvariant(
+		'refactor-m4-all-safe-response-boundary-memory-sample-complete',
+		(samples['refactor.m4.allSafe.responseBoundaryIncrementalMemoryMiB']
+			?.length ?? 0) === 1,
+		JSON.stringify(
+			samples['refactor.m4.allSafe.responseBoundaryIncrementalMemoryMiB']
+		)
+	);
+	await stopEditLongTaskObservation(page);
+}
+
+function refactorStoreSnapshot(current: PerformanceSnapshot) {
+	const readModel = current.renderer.core.hosts[0]?.client?.readModel;
+
+	return readModel
+		? {
+				refactorPlanStoreBytes: readModel.refactorPlanStoreBytes,
+				refactorPlanStoreEntryCount: readModel.refactorPlanStoreEntryCount,
+				refactorPlanStoreFingerprint: readModel.refactorPlanStoreFingerprint
+			}
+		: undefined;
+}
+
+function refactorPlanningTaskSnapshot(current: PerformanceSnapshot) {
+	const readModel = current.renderer.core.hosts[0]?.client?.readModel;
+
+	return readModel
+		? {
+				refactorPlanningTaskBytes: readModel.refactorPlanningTaskBytes,
+				refactorPlanningTaskCount: readModel.refactorPlanningTaskCount
+			}
+		: undefined;
+}
+
+function refactorOwnedMiB(
+	current: PerformanceSnapshot,
+	checkpointName?: string
+) {
+	const checkpoint = checkpointName
+		? current.main.memoryCheckpoints.find(item => item.name === checkpointName)
+		: [...current.main.memoryCheckpoints].sort(
+				(left, right) => right.recordedAtEpochMs - left.recordedAtEpochMs
+			)[0];
+	const ownedBytes = checkpoint?.ownedHighWater.totalBytes;
+
+	// The authoritative tuple is recorded in main after CDP samples the worker
+	// target: renderer JS + CDP worker usedSize + one response's WASM bytes.
+	return typeof ownedBytes === 'number'
+		? ownedBytes / (1024 * 1024)
+		: undefined;
+}
+
+function refactorProcessPrivateComponentsMiB(current: PerformanceSnapshot) {
+	return {
+		main: (current.main.processMemory?.private ?? 0) / 1024,
+		renderer:
+			(current.main.rendererNativeMemory?.processMemory.private ?? 0) / 1024
+	};
+}
+
+function refactorOwnedIncrementalMiB(
+	baseline: PerformanceSnapshot,
+	current: PerformanceSnapshot
+) {
+	const currentMiB = refactorOwnedMiB(current);
+	const baselineMiB = refactorOwnedMiB(baseline, 'refactor-baseline');
+
+	return currentMiB === undefined || baselineMiB === undefined
+		? undefined
+		: Math.max(0, currentMiB - baselineMiB);
+}
+
+function recordRefactorMemoryObservation(
+	baseline: PerformanceSnapshot,
+	current: PerformanceSnapshot
+) {
+	addSample(
+		'refactor.peakIncrementalMemoryMiB',
+		refactorOwnedIncrementalMiB(baseline, current)
+	);
+	const beforePrivate = refactorProcessPrivateComponentsMiB(baseline);
+	const currentPrivate = refactorProcessPrivateComponentsMiB(current);
+
+	addSample(
+		'refactor.processPrivateIncrementalMiB',
+		Math.max(
+			0,
+			currentPrivate.main +
+				currentPrivate.renderer -
+				(beforePrivate.main + beforePrivate.renderer)
+		)
+	);
+	addSample(
+		'refactor.processPrivateMainIncrementalMiB',
+		Math.max(0, currentPrivate.main - beforePrivate.main)
+	);
+	addSample(
+		'refactor.processPrivateRendererIncrementalMiB',
+		Math.max(0, currentPrivate.renderer - beforePrivate.renderer)
+	);
+}
+
+function recordRefactorCheckpointMemoryObservation(
+	baseline: PerformanceSnapshot,
+	checkpoint: PerformanceSnapshot['main']['memoryCheckpoints'][number]
+) {
+	addSample(
+		'refactor.peakIncrementalMemoryMiB',
+		checkpoint.ownedHighWater.totalBytes === undefined ||
+			refactorOwnedMiB(baseline, 'refactor-baseline') === undefined
+			? undefined
+			: Math.max(
+					0,
+					checkpoint.ownedHighWater.totalBytes / (1024 * 1024) -
+						refactorOwnedMiB(baseline, 'refactor-baseline')!
+				)
+	);
+	const beforePrivate = refactorProcessPrivateComponentsMiB(baseline);
+	const privateHighWater = checkpoint.processPrivateHighWater;
+
+	addSample(
+		'refactor.processPrivateIncrementalMiB',
+		Math.max(
+			0,
+			privateHighWater.totalBytes / (1024 * 1024) -
+				(beforePrivate.main + beforePrivate.renderer)
+		)
+	);
+	addSample(
+		'refactor.processPrivateMainIncrementalMiB',
+		Math.max(
+			0,
+			privateHighWater.mainPrivateBytes / (1024 * 1024) - beforePrivate.main
+		)
+	);
+	addSample(
+		'refactor.processPrivateRendererIncrementalMiB',
+		Math.max(
+			0,
+			privateHighWater.rendererPrivateBytes / (1024 * 1024) -
+				beforePrivate.renderer
+		)
+	);
+}
+
+async function planRefactor(
+	page: Page,
+	target: RefactorFixtureTarget,
+	{cancelOnFirstPending = false}: {cancelOnFirstPending?: boolean} = {}
+) {
+	return page.evaluate(
+		async ({cancelOnFirstPending, target}) => {
+			const controller = new AbortController();
+			let pendingCount = 0;
+			const startedAt = performance.now();
+			const operation = (window as any).twinePerformance.refactor.plan(
+				target.storyId,
+				{
+					includePassageNames: false,
+					includePassageText: true,
+					includeScript: false,
+					includeStylesheet: false,
+					matchCase: true,
+					query: 'Synthetic',
+					replacement: 'Generated',
+					storyId: target.storyId,
+					useRegexes: false
+				},
+				{
+					signal: controller.signal,
+					onProgress: (progress: {type: string}) => {
+						if (progress.type === 'pending') {
+							pendingCount += 1;
+							if (cancelOnFirstPending) controller.abort();
+						}
+					}
+				}
+			);
+			const result = await operation.result;
+			const durationMs = performance.now() - startedAt;
+			await operation.terminalCheckpoint;
+			return {
+				durationMs,
+				pendingCount,
+				result,
+				serializedBytes: new TextEncoder().encode(JSON.stringify(result))
+					.byteLength
+			};
+		},
+		{cancelOnFirstPending, target}
+	);
+}
+
+async function applyRefactorUnrelatedEditorMutation(page: Page, label: string) {
+	await page
+		.getByRole('group', {name: 'Workspace Mode'})
+		.getByRole('tab', {name: 'Text'})
+		.click();
+	const content = page
+		.locator('.story-edit-editor-window')
+		.first()
+		.locator('[data-testid^="story-editor-window-"]')
+		.first()
+		.locator('.cm-content');
+	await expect(content).toBeVisible({timeout: 60_000});
+	const beforeRevision = await currentRevision(page);
+	await content.click();
+	await page.keyboard.press('End');
+	const startedAt = await page.evaluate(() => performance.now());
+	await page.keyboard.insertText(` ${label}`);
+	const revision = await waitForRevisionAfter(page, beforeRevision);
+	await waitForRevisionEvent(page, ['mutation-applied'], revision);
+	await waitForMutationPaintAfter(page, startedAt);
+
+	return {beforeRevision, revision};
+}
+
+async function measureRefactorTyping(
+	page: Page,
+	target: RefactorFixtureTarget,
+	baseline: PerformanceSnapshot,
+	initialHighWaterSampleCount: number
+) {
+	const warmups = 2;
+	const measured = 20;
+	await page
+		.getByRole('group', {name: 'Workspace Mode'})
+		.getByRole('tab', {name: 'Text'})
+		.click();
+	const editor = page
+		.locator('.story-edit-editor-window')
+		.first()
+		.locator('[data-testid^="story-editor-window-"]')
+		.first();
+	const content = editor.locator('.cm-content');
+	await expect(content).toBeVisible({timeout: 60_000});
+
+	let expectedHighWaterSampleCount = initialHighWaterSampleCount;
+	let measuredWindows = 0;
+	let warmupWindows = 0;
+	const compositorSettles: RefactorTypingCompositorSettle[] = [];
+
+	for (let index = 0; index < warmups + measured; index++) {
+		await page.evaluate(target => {
+			const controller = new AbortController();
+			const probe = {
+				active: true,
+				controller,
+				gateHeld: false,
+				pending: 0,
+				promise: undefined as Promise<unknown> | undefined,
+				releasePendingGate: undefined as (() => void) | undefined
+			};
+			(window as any).__twineRefactorTypingProbe = probe;
+			probe.promise = (window as any).twinePerformance.refactor
+				.plan(
+					target.storyId,
+					{
+						includePassageNames: false,
+						includePassageText: true,
+						includeScript: false,
+						includeStylesheet: false,
+						matchCase: true,
+						query: 'Synthetic',
+						replacement: 'Generated',
+						storyId: target.storyId,
+						useRegexes: false
+					},
+					{
+						signal: controller.signal,
+						onProgress: async (result: {type: string}) => {
+							if (result.type !== 'pending') return;
+							probe.pending += 1;
+							if (probe.gateHeld) return;
+							probe.gateHeld = true;
+							await new Promise<void>(resolve => {
+								probe.releasePendingGate = resolve;
+							});
+						}
+					}
+				)
+				.result.finally(() => {
+					probe.active = false;
+				});
+		}, target);
+		await page.waitForFunction(
+			() => (window as any).__twineRefactorTypingProbe?.pending > 0,
+			undefined,
+			{timeout: 60_000}
+		);
+		// This is the sole pre-edit observation. The planner is still held at its
+		// awaited pending callback, so one coherent snapshot records task/store
+		// ownership, the shared high-water result, and the revision for this edit.
+		const pendingSnapshot = await snapshot(page);
+		recordRefactorMemoryObservation(baseline, pendingSnapshot);
+		const storeBeforeCancellation = refactorStoreSnapshot(pendingSnapshot);
+		const pendingCheckpoint = pendingSnapshot.main.memoryCheckpoints.find(
+			checkpoint => checkpoint.name === 'refactor-plan-high-water'
+		);
+		const beforeRevision =
+			pendingSnapshot.renderer.core.hosts[0]?.sessions[0]?.revision ?? 0;
+		assertInvariant(
+			`refactor-typing-${index}-pending-coherent-observation`,
+			await page.evaluate(
+				() => (window as any).__twineRefactorTypingProbe?.active === true
+			)
+		);
+		const pendingTask = refactorPlanningTaskSnapshot(pendingSnapshot);
+		assertInvariant(
+			`refactor-typing-${index}-pending-rust-task-observable`,
+			pendingTask?.refactorPlanningTaskCount === 1 &&
+				(pendingTask.refactorPlanningTaskBytes ?? 0) > 0,
+			JSON.stringify(pendingTask)
+		);
+		assertInvariant(
+			`refactor-typing-${index}-shared-high-water-recorded-once`,
+			pendingCheckpoint?.sampleCount === expectedHighWaterSampleCount + 1,
+			JSON.stringify({
+				expected: expectedHighWaterSampleCount + 1,
+				observed: pendingCheckpoint?.sampleCount
+			})
+		);
+		assertInvariant(
+			`refactor-typing-${index}-pending-observation-supplies-store-and-revision`,
+			storeBeforeCancellation !== undefined &&
+				typeof storeBeforeCancellation.refactorPlanStoreFingerprint ===
+					'string' &&
+				Number.isSafeInteger(
+					storeBeforeCancellation.refactorPlanStoreEntryCount
+				) &&
+				Number.isSafeInteger(storeBeforeCancellation.refactorPlanStoreBytes) &&
+				Number.isSafeInteger(beforeRevision) &&
+				beforeRevision >= 0,
+			JSON.stringify({beforeRevision, storeBeforeCancellation})
+		);
+		if (pendingCheckpoint) {
+			expectedHighWaterSampleCount = pendingCheckpoint.sampleCount;
+		}
+		const compositorSettle = await page.evaluate(async () => {
+			const isReady = () => {
+				const probe = (window as any).__twineRefactorTypingProbe;
+				return (
+					probe?.active === true && probe.gateHeld === true && probe.pending > 0
+				);
+			};
+			let frames = 0;
+			let ready = isReady();
+			await new Promise<void>(resolve => {
+				requestAnimationFrame(() => {
+					frames += 1;
+					const firstFrameReady = isReady();
+					ready = ready && firstFrameReady;
+					requestAnimationFrame(() => {
+						frames += 1;
+						const secondFrameReady = isReady();
+						ready = ready && secondFrameReady;
+						resolve();
+					});
+				});
+			});
+			const probe = (window as any).__twineRefactorTypingProbe;
+			return {frames, pending: probe?.pending ?? 0, ready};
+		});
+		if (compositorSettles.length < warmups + measured) {
+			compositorSettles.push({index, ...compositorSettle});
+		}
+		assertInvariant(
+			`refactor-typing-${index}-input-compositor-settled`,
+			compositorSettle.frames === 2 &&
+				compositorSettle.pending > 0 &&
+				compositorSettle.ready,
+			JSON.stringify({index, ...compositorSettle})
+		);
+		await content.click();
+		await page.keyboard.press('End');
+		const startedAt = await page.evaluate(() => performance.now());
+		await page.keyboard.insertText(` refactor-typing-${index}`);
+		const revision = await waitForRevisionAfter(page, beforeRevision);
+		const editTiming = await waitForMutationPaintForRevision(page, {
+			inputStartedAt: startedAt,
+			revision
+		});
+		const paint = editTiming.paint;
+		const window = {
+			duration: Math.max(0, paint.startTime + paint.duration - startedAt),
+			startTime: startedAt
+		};
+		const longTasks = window ? await mutationWindowLongTasks(page, window) : [];
+		addSample(
+			'refactor.longTaskMs',
+			Math.max(0, ...longTasks.map(task => task.duration))
+		);
+		assertInvariant(`refactor-typing-${index}-paint-present`, !!paint);
+		assertInvariant(
+			`refactor-typing-${index}-new-revision`,
+			revision > beforeRevision,
+			`${beforeRevision} -> ${revision}`
+		);
+		assertInvariant(
+			`refactor-typing-${index}-plan-pending-through-paint`,
+			await page.evaluate(
+				() =>
+					(window as any).__twineRefactorTypingProbe?.active === true &&
+					(window as any).__twineRefactorTypingProbe?.pending > 0
+			)
+		);
+		if (index < warmups) {
+			warmupWindows += 1;
+		} else {
+			measuredWindows += 1;
+			addSample('refactor.editPaintMs', paint.duration);
+			addSample('refactor.editWorkerMs', editTiming.stages.workerMs);
+			addSample(
+				'refactor.editPatchDispatchMs',
+				editTiming.stages.patchDispatchMs
+			);
+			addSample('refactor.editFrameWaitMs', editTiming.stages.frameWaitMs);
+		}
+		assertInvariant(
+			`refactor-typing-${index}-stage-durations-valid`,
+			[
+				...Object.values(editTiming.stages).filter(
+					(value): value is number => typeof value === 'number'
+				)
+			].every(value => Number.isFinite(value) && value >= 0),
+			JSON.stringify(editTiming.stages)
+		);
+		assertInvariant(
+			`refactor-typing-${index}-stages-recompute-paint`,
+			Math.abs(
+				editTiming.stages.workerMs +
+					editTiming.stages.patchDispatchMs +
+					editTiming.stages.frameWaitMs -
+					editTiming.stages.totalMs
+			) <= 0.5,
+			JSON.stringify(editTiming.stages)
+		);
+		for (const task of longTasks) {
+			addSample('refactor.longTaskMs', task.duration);
+			assertInvariant(
+				`refactor-typing-${index}-long-task-limit`,
+				task.duration <= 50,
+				`${task.duration.toFixed(2)}ms`
+			);
+		}
+		const cancellation = await page.evaluate(async () => {
+			const probe = (window as any).__twineRefactorTypingProbe;
+			probe.controller.abort();
+			probe.releasePendingGate?.();
+			const result = await probe.promise;
+			delete (window as any).__twineRefactorTypingProbe;
+			return result;
+		});
+		const afterCancellationSnapshot = await snapshot(page);
+		const storeAfterCancellation = refactorStoreSnapshot(
+			afterCancellationSnapshot
+		);
+		const taskAfterCancellation = refactorPlanningTaskSnapshot(
+			afterCancellationSnapshot
+		);
+		assertInvariant(
+			`refactor-typing-${index}-cancelled-after-paint`,
+			(cancellation as {type?: string}).type === 'cancelled',
+			JSON.stringify(cancellation)
+		);
+		assertInvariant(
+			`refactor-typing-${index}-cancellation-keeps-plan-store`,
+			JSON.stringify(storeBeforeCancellation) ===
+				JSON.stringify(storeAfterCancellation),
+			JSON.stringify({storeAfterCancellation, storeBeforeCancellation})
+		);
+		assertInvariant(
+			`refactor-typing-${index}-cancellation-releases-rust-task`,
+			taskAfterCancellation?.refactorPlanningTaskCount === 0 &&
+				taskAfterCancellation.refactorPlanningTaskBytes === 0,
+			JSON.stringify({taskAfterCancellation})
+		);
+		const undo = page.getByRole('button', {name: /^Undo/});
+		await expect(undo).toBeEnabled();
+		await undo.click();
+		const undoRevision = await waitForRevisionAfter(page, revision);
+		await waitForRevisionEvent(page, ['undo-applied'], undoRevision);
+	}
+
+	assertInvariant(
+		'refactor-typing-warmup-policy',
+		warmupWindows === 2 && measuredWindows === 20,
+		JSON.stringify({measuredWindows, warmupWindows})
+	);
+	assertInvariant(
+		'refactor-typing-input-compositor-settles-complete',
+		compositorSettles.length === warmups + measured &&
+			compositorSettles.every(
+				(observation, position) =>
+					observation.index === position &&
+					observation.frames === 2 &&
+					observation.pending > 0 &&
+					observation.ready
+			),
+		JSON.stringify(compositorSettles)
+	);
+
+	return compositorSettles;
+}
+
+function checkpointFor(current: PerformanceSnapshot, name: string) {
+	return current.main.memoryCheckpoints.find(
+		checkpoint => checkpoint.name === name
+	);
+}
+
+async function verifyWorkerJsMemoryProbe(page: Page, storyId: string) {
+	const initialCheckpointMs = await recordMemoryDetailCheckpoint(
+		page,
+		'refactor-worker-probe-attached'
+	);
+	const attached = await snapshot(page);
+	const attachedCheckpoint = checkpointFor(
+		attached,
+		'refactor-worker-probe-attached'
+	);
+
+	assertInvariant(
+		'refactor-worker-cdp-memory-observation-supported',
+		typeof attachedCheckpoint?.renderer.workerHeapCdpUsedBytes === 'number' &&
+			typeof attachedCheckpoint.renderer.workerWasmMemoryBytes === 'number' &&
+			typeof attachedCheckpoint.renderer.workerHeapCdpSampledAtEpochMs ===
+				'number' &&
+			typeof attachedCheckpoint.renderer.workerHeapCdpTargetId === 'string' &&
+			typeof attachedCheckpoint.renderer.workerHeapCdpResponseDriftMs ===
+				'number' &&
+			attachedCheckpoint.renderer.workerHeapCdpResponseDriftMs <= 5_000,
+		JSON.stringify(attachedCheckpoint?.renderer)
+	);
+	assertInvariant(
+		'refactor-worker-cdp-first-response-bounded',
+		initialCheckpointMs < 4_000,
+		`${initialCheckpointMs.toFixed(1)}ms`
+	);
+
+	const diagnosticStartedAt = nodePerformance.now();
+	await page.evaluate(
+		targetStoryId =>
+			(window as any).twinePerformance.worker.diagnostics(targetStoryId),
+		storyId
+	);
+	const diagnosticMs = nodePerformance.now() - diagnosticStartedAt;
+	assertInvariant(
+		'refactor-worker-post-attach-diagnostic-bounded',
+		diagnosticMs < 2_000,
+		`${diagnosticMs.toFixed(1)}ms`
+	);
+	const diagnosticReadModel = (await snapshot(page)).renderer.core.hosts[0]
+		?.client?.readModel;
+	assertInvariant(
+		'refactor-worker-diagnostic-retained-before-metric-only-probe',
+		diagnosticReadModel !== undefined,
+		JSON.stringify(diagnosticReadModel)
+	);
+	// The diagnostic itself may grow the WASM allocator. Baseline after it, so
+	// the retained JS-string probe is isolated from that legitimate worker work.
+	await recordMemoryDetailCheckpoint(page, 'refactor-worker-probe-before');
+	const before = await snapshot(page);
+	const beforeCheckpoint = checkpointFor(
+		before,
+		'refactor-worker-probe-before'
+	);
+
+	const retained = await page.evaluate(() =>
+		(window as any).twinePerformance.worker.probeJsHeap(
+			'retain',
+			8 * 1024 * 1024
+		)
+	);
+	await recordMemoryDetailCheckpoint(page, 'refactor-worker-probe-retained');
+	const whileRetained = await snapshot(page);
+	const retainedCheckpoint = checkpointFor(
+		whileRetained,
+		'refactor-worker-probe-retained'
+	);
+	assertInvariant(
+		'refactor-worker-metric-only-probe-does-not-erase-read-model-diagnostic',
+		JSON.stringify(whileRetained.renderer.core.hosts[0]?.client?.readModel) ===
+			JSON.stringify(diagnosticReadModel),
+		JSON.stringify({
+			afterMetricOnlyProbe:
+				whileRetained.renderer.core.hosts[0]?.client?.readModel,
+			diagnosticReadModel
+		})
+	);
+	const beforeOwnedMiB = refactorOwnedMiB(
+		before,
+		'refactor-worker-probe-before'
+	);
+	const retainedOwnedMiB = refactorOwnedMiB(
+		whileRetained,
+		'refactor-worker-probe-retained'
+	);
+
+	assertInvariant(
+		'refactor-worker-js-probe-retained-owner',
+		retained?.retained === true && retained.allocatedBytes >= 8 * 1024 * 1024,
+		JSON.stringify(retained)
+	);
+	assertInvariant(
+		'refactor-worker-cdp-probe-conservative-increase',
+		typeof beforeCheckpoint?.renderer.workerHeapCdpUsedBytes === 'number' &&
+			typeof retainedCheckpoint?.renderer.workerHeapCdpUsedBytes === 'number' &&
+			retainedCheckpoint.renderer.workerHeapCdpUsedBytes >=
+				beforeCheckpoint.renderer.workerHeapCdpUsedBytes + 1024 * 1024,
+		JSON.stringify({beforeCheckpoint, retainedCheckpoint})
+	);
+	assertInvariant(
+		'refactor-worker-js-probe-wasm-unchanged',
+		retainedCheckpoint?.renderer.workerWasmMemoryBytes ===
+			beforeCheckpoint?.renderer.workerWasmMemoryBytes,
+		JSON.stringify({beforeCheckpoint, retainedCheckpoint})
+	);
+	assertInvariant(
+		'refactor-worker-js-probe-composite-increase',
+		typeof beforeOwnedMiB === 'number' &&
+			typeof retainedOwnedMiB === 'number' &&
+			retainedOwnedMiB > beforeOwnedMiB,
+		JSON.stringify({beforeOwnedMiB, retainedOwnedMiB})
+	);
+
+	const released = await page.evaluate(() =>
+		(window as any).twinePerformance.worker.probeJsHeap('release')
+	);
+
+	assertInvariant(
+		'refactor-worker-js-probe-owner-cleared',
+		released?.retained === false && released.allocatedBytes === 0,
+		JSON.stringify(released)
+	);
+	await page.evaluate(
+		targetStoryId =>
+			(window as any).twinePerformance.worker.diagnostics(targetStoryId),
+		storyId
+	);
+	const afterRelease = await snapshot(page);
+	const afterReleaseStore = refactorStoreSnapshot(afterRelease);
+	assertInvariant(
+		'refactor-worker-probe-release-has-explicit-empty-store',
+		afterReleaseStore?.refactorPlanStoreEntryCount === 0 &&
+			afterReleaseStore.refactorPlanStoreBytes === 0,
+		JSON.stringify(afterReleaseStore)
+	);
+}
+
+async function measureRefactor(
+	page: Page,
+	target: RefactorFixtureTarget,
+	m3QueryTarget: M3QueryFixtureTarget
+) {
+	const checkpoints: PerformanceSnapshot[] = [];
+	const warmups = 3;
+	const measured = 20;
+	const refactorBridgeKinds = new Set<string>();
+	const refactorBridgeKindsWithRustTiming = new Set<string>();
+	let refactorReplaceProjectObserved = false;
+	let typingCompositorSettles: RefactorTypingCompositorSettle[] = [];
+	const captureRefactorBridgeOperation = (metric: any) => {
+		refactorBridgeKinds.add(metric.kind);
+		if (
+			metric.rustStartedAtEpochMs !== undefined &&
+			metric.rustFinishedAtEpochMs !== undefined
+		) {
+			refactorBridgeKindsWithRustTiming.add(metric.kind);
+		}
+		refactorReplaceProjectObserved ||= metric.kind === 'replaceProject';
+	};
+	const captureRefactorBridgeOperations = (current: PerformanceSnapshot) => {
+		for (const metric of current.renderer.bridgeMetrics) {
+			captureRefactorBridgeOperation(metric);
+		}
+	};
+	await startEditLongTaskObservation(page);
+	try {
+		await measureM3Queries(page, m3QueryTarget);
+		captureRefactorBridgeOperations(await snapshot(page));
+		// This retained-worker probe is a structural measurement-integrity check,
+		// not a refactor sample. It runs before the baseline so its deliberately
+		// retained allocation cannot contribute to the 64/128 MiB budget.
+		await verifyWorkerJsMemoryProbe(page, target.storyId);
+		await recordMemoryDetailCheckpoint(page, 'refactor-baseline');
+		const baseline = await snapshot(page);
+		checkpoints.push(baseline);
+		const typingBaselineStore = refactorStoreSnapshot(baseline);
+		assertInvariant(
+			'refactor-typing-baseline-has-no-completed-plan',
+			typingBaselineStore?.refactorPlanStoreEntryCount === 0 &&
+				typingBaselineStore.refactorPlanStoreBytes === 0,
+			JSON.stringify(typingBaselineStore)
+		);
+		const typingInitialHighWaterSampleCount =
+			baseline.main.memoryCheckpoints.find(
+				checkpoint => checkpoint.name === 'refactor-plan-high-water'
+			)?.sampleCount ?? 0;
+		// Keep the responsiveness measurement isolated from later plan/detail,
+		// selection, review-owner, and forced-GC workloads. Each window holds its
+		// first native planning chunk pending until its exact edit paint completes.
+		typingCompositorSettles = await measureRefactorTyping(
+			page,
+			target,
+			baseline,
+			typingInitialHighWaterSampleCount
+		);
+		const postTyping = await snapshot(page);
+		checkpoints.push(postTyping);
+		recordRefactorMemoryObservation(baseline, postTyping);
+		const typingStoreAfterCancellation = refactorStoreSnapshot(postTyping);
+		assertInvariant(
+			'refactor-typing-cancellations-create-no-completed-plan',
+			JSON.stringify(typingStoreAfterCancellation) ===
+				JSON.stringify(typingBaselineStore),
+			JSON.stringify({typingBaselineStore, typingStoreAfterCancellation})
+		);
+		const summaries: any[] = [];
+		let maxStoreEntries = 0;
+		let maxStoreBytes = 0;
+
+		for (let index = 0; index < warmups + measured; index++) {
+			const windowStart = await page.evaluate(() => performance.now());
+			const beforePlan = await snapshot(page);
+			const pendingSamplesBeforePlan =
+				beforePlan.main.memoryCheckpoints.find(
+					checkpoint => checkpoint.name === 'refactor-plan-high-water'
+				)?.sampleCount ?? 0;
+			const localPendingObservationsBeforePlan =
+				beforePlan.renderer.refactorPendingChunkObservations.local;
+			const nativePendingObservationsBeforePlan =
+				beforePlan.renderer.refactorPendingChunkObservations.native;
+			const planning = await planRefactor(page, target);
+			const longTasks = await mutationWindowLongTasks(page, {
+				duration: planning.durationMs,
+				startTime: windowStart
+			});
+			addSample(
+				'refactor.longTaskMs',
+				Math.max(0, ...longTasks.map(task => task.duration))
+			);
+			assertInvariant(
+				`refactor-summary-${index}-completed`,
+				planning.result.type === 'complete',
+				JSON.stringify(planning.result)
+			);
+			assertInvariant(
+				`refactor-summary-${index}-dto-limit`,
+				planning.serializedBytes <= 64 * 1024,
+				`${planning.serializedBytes} bytes`
+			);
+			for (const task of longTasks) {
+				addSample('refactor.longTaskMs', task.duration);
+				assertInvariant(
+					`refactor-summary-${index}-long-task-limit`,
+					task.duration <= 50,
+					`${task.duration.toFixed(2)}ms`
+				);
+			}
+			if (planning.result.type !== 'complete') continue;
+			summaries.push(planning.result.summary);
+			assertInvariant(
+				`refactor-summary-${index}-ttl-limit`,
+				planning.result.summary.expiresAtEpochMs > Date.now() &&
+					planning.result.summary.expiresAtEpochMs <=
+						Date.now() + 10 * 60 * 1000 + 5_000,
+				String(planning.result.summary.expiresAtEpochMs)
+			);
+			const current = await snapshot(page);
+			captureRefactorBridgeOperations(current);
+			const pendingCheckpoint = current.main.memoryCheckpoints.find(
+				checkpoint => checkpoint.name === 'refactor-plan-high-water'
+			);
+			assertInvariant(
+				`refactor-summary-${index}-all-pending-chunks-locally-observed`,
+				current.renderer.refactorPendingChunkObservations.local -
+					localPendingObservationsBeforePlan ===
+					planning.pendingCount,
+				JSON.stringify({
+					local: current.renderer.refactorPendingChunkObservations.local,
+					before: localPendingObservationsBeforePlan,
+					pending: planning.pendingCount
+				})
+			);
+			assertInvariant(
+				`refactor-summary-${index}-renderer-high-water-checkpoints`,
+				current.renderer.refactorPendingChunkObservations.native -
+					nativePendingObservationsBeforePlan ===
+					(planning.pendingCount === 0 ? 0 : 2) &&
+					(pendingCheckpoint?.sampleCount ?? pendingSamplesBeforePlan) -
+						pendingSamplesBeforePlan ===
+						(planning.pendingCount === 0 ? 0 : 2),
+				JSON.stringify({
+					native: current.renderer.refactorPendingChunkObservations.native,
+					nativeBefore: nativePendingObservationsBeforePlan,
+					checkpointSamples: pendingCheckpoint?.sampleCount,
+					checkpointSamplesBefore: pendingSamplesBeforePlan,
+					pending: planning.pendingCount
+				})
+			);
+			if (pendingCheckpoint) {
+				recordRefactorCheckpointMemoryObservation(baseline, pendingCheckpoint);
+			}
+			const store = refactorStoreSnapshot(current);
+			maxStoreEntries = Math.max(
+				maxStoreEntries,
+				store?.refactorPlanStoreEntryCount ?? 0
+			);
+			maxStoreBytes = Math.max(
+				maxStoreBytes,
+				store?.refactorPlanStoreBytes ?? 0
+			);
+			if (index >= warmups) {
+				addSample('refactor.summaryGenerationMs', planning.durationMs);
+				addSample('refactor.summaryBytes', planning.serializedBytes);
+			}
+		}
+
+		assertInvariant(
+			'refactor-summary-samples-complete',
+			summaries.length === 23
+		);
+		assertInvariant(
+			'refactor-worker-mode-active',
+			(await snapshot(page)).renderer.core.hosts[0]?.mode === 'wasm-worker'
+		);
+		assertInvariant(
+			'refactor-plan-store-entry-limit',
+			maxStoreEntries <= 8,
+			String(maxStoreEntries)
+		);
+		addSample('refactor.planStoreMiB', maxStoreBytes / (1024 * 1024));
+		assertInvariant(
+			'refactor-plan-store-bytes-observable',
+			Number.isFinite(maxStoreBytes),
+			String(maxStoreBytes)
+		);
+		await recordMemoryDetailCheckpoint(page, 'refactor-post-plan');
+		const postPlan = await snapshot(page);
+		checkpoints.push(postPlan);
+		recordRefactorMemoryObservation(baseline, postPlan);
+		const stalePlanning = await planRefactor(page, target);
+		assertInvariant(
+			'refactor-stale-plan-created-fresh',
+			stalePlanning.result.type === 'complete',
+			JSON.stringify(stalePlanning.result)
+		);
+		const staleSummary =
+			stalePlanning.result.type === 'complete'
+				? stalePlanning.result.summary
+				: undefined;
+		const staleEdit = await applyRefactorUnrelatedEditorMutation(
+			page,
+			'refactor-stale-plan-edit'
+		);
+		// The edit is expected to persist; drain it before attributing any later
+		// mutation/persistence event to the stale apply attempt.
+		await waitForPersistenceIdle(page);
+		const staleApply = await page.evaluate(
+			async ({storyId, summary}) => {
+				const startedAt = performance.now();
+				const result = await (window as any).twinePerformance.refactor.apply(
+					storyId,
+					{
+						expectedProjectRevision: summary.projectRevision,
+						planId: summary.planId,
+						selection: {type: 'all'}
+					}
+				);
+				return {result, startedAt};
+			},
+			{storyId: target.storyId, summary: staleSummary}
+		);
+		const staleAfterApply = await snapshot(page);
+		captureRefactorBridgeOperations(staleAfterApply);
+		assertInvariant(
+			'refactor-stale-plan-rejected-after-real-edit',
+			staleApply.result.type === 'failure' &&
+				staleApply.result.failure.code === 'stale-project-revision',
+			JSON.stringify(staleApply)
+		);
+		assertInvariant(
+			'refactor-stale-plan-does-not-mutate-or-persist',
+			(staleAfterApply.renderer.core.hosts[0]?.sessions[0]?.revision ?? 0) ===
+				staleEdit.revision &&
+				!staleAfterApply.renderer.events.some(
+					event =>
+						event.time >= staleApply.startedAt &&
+						(event.name === 'mutation-applied' ||
+							event.name === 'persistence-save-queued')
+				)
+		);
+		const staleUndo = page.getByRole('button', {name: /^Undo/});
+		await expect(staleUndo).toBeEnabled();
+		await staleUndo.click();
+		const staleUndoRevision = await waitForRevisionAfter(
+			page,
+			staleEdit.revision
+		);
+		await waitForRevisionEvent(page, ['undo-applied'], staleUndoRevision);
+
+		// Establish the retained-frontend baseline before the fresh plan captures
+		// its product-owned summary/page DTOs. The helper is renderer-local, so no
+		// main-process snapshot can be retained by the value being measured.
+		await page.evaluate(storyId => {
+			(window as any).twinePerformance.review.closeReview(storyId);
+		}, target.storyId);
+		const reviewHeapBeforeOwnership = await page.evaluate(() =>
+			(window as any).twinePerformance.rendererHeapAfterGarbageCollection()
+		);
+
+		const detailPlanning = await planRefactor(page, target);
+		assertInvariant(
+			'refactor-detail-plan-created-fresh',
+			detailPlanning.result.type === 'complete',
+			JSON.stringify(detailPlanning.result)
+		);
+		const detailSummary =
+			detailPlanning.result.type === 'complete'
+				? detailPlanning.result.summary
+				: undefined;
+		let reviewOwnerCursor = detailSummary?.firstDetailCursor;
+
+		for (let index = 0; detailSummary && index < warmups + measured; index++) {
+			const detail = await page.evaluate(
+				async ({cursor, storyId}) => {
+					const startedAt = performance.now();
+					const result = await (window as any).twinePerformance.refactor.detail(
+						storyId,
+						cursor
+					);
+					return {
+						durationMs: performance.now() - startedAt,
+						result,
+						serializedBytes: new TextEncoder().encode(JSON.stringify(result))
+							.byteLength
+					};
+				},
+				{cursor: detailSummary.firstDetailCursor, storyId: target.storyId}
+			);
+			assertInvariant(
+				`refactor-detail-${index}-page`,
+				detail.result.type === 'page'
+			);
+			if (detail.result.type === 'page') {
+				assertInvariant(
+					`refactor-detail-${index}-change-limit`,
+					detail.result.page.changes.length <= 200,
+					String(detail.result.page.changes.length)
+				);
+			}
+			assertInvariant(
+				`refactor-detail-${index}-byte-limit`,
+				detail.serializedBytes <= 256 * 1024,
+				`${detail.serializedBytes} bytes`
+			);
+			if (index >= warmups) {
+				addSample('refactor.detailPageMs', detail.durationMs);
+				addSample('refactor.detailPageBytes', detail.serializedBytes);
+			}
+			if (index === 0) captureRefactorBridgeOperations(await snapshot(page));
+		}
+		const selectionPlanning = await planRefactor(page, target);
+		if (selectionPlanning.result.type === 'complete') {
+			const selectionSummary = selectionPlanning.result.summary;
+			reviewOwnerCursor = selectionSummary.firstDetailCursor;
+			const revisionBeforeSelection = await currentRevision(page);
+			const selectionFailures = await page.evaluate(
+				async ({storyId, summary}) => {
+					const harness = (window as any).twinePerformance;
+					const invalid = await harness.refactor.apply(storyId, {
+						expectedProjectRevision: summary.projectRevision,
+						planId: summary.planId,
+						selection: {type: 'only', changeIds: ['unknown-change']}
+					});
+					const over = await harness.refactor.apply(storyId, {
+						expectedProjectRevision: summary.projectRevision,
+						planId: summary.planId,
+						selection: {
+							type: 'allExcept',
+							changeIds: Array.from(
+								{length: 50_001},
+								(_, index) => `selection-${index}`
+							)
+						}
+					});
+					const byteOver = await harness.refactor.apply(storyId, {
+						expectedProjectRevision: summary.projectRevision,
+						planId: summary.planId,
+						selection: {
+							type: 'only',
+							changeIds: Array.from(
+								{length: 49_999},
+								(_, index) => `${index}-${'x'.repeat(96)}`
+							)
+						}
+					});
+					return {byteOver, invalid, over};
+				},
+				{storyId: target.storyId, summary: selectionSummary}
+			);
+			assertInvariant(
+				'refactor-live-invalid-compact-selection-rejected',
+				selectionFailures.invalid.type === 'failure' &&
+					selectionFailures.invalid.failure.code === 'invalid-selection',
+				JSON.stringify(selectionFailures.invalid)
+			);
+			assertInvariant(
+				'refactor-live-over-limit-compact-selection-rejected',
+				selectionFailures.over.type === 'failure' &&
+					selectionFailures.over.failure.code === 'selection-too-large',
+				JSON.stringify(selectionFailures.over)
+			);
+			assertInvariant(
+				'refactor-live-over-byte-limit-compact-selection-rejected',
+				selectionFailures.byteOver.type === 'failure' &&
+					selectionFailures.byteOver.failure.code === 'selection-too-large',
+				JSON.stringify(selectionFailures.byteOver)
+			);
+			assertInvariant(
+				'refactor-live-selection-failures-do-not-mutate',
+				(await currentRevision(page)) === revisionBeforeSelection
+			);
+		}
+		assertInvariant(
+			'refactor-detail-samples-complete',
+			(samples['refactor.detailPageMs']?.length ?? 0) === measured,
+			String(samples['refactor.detailPageMs']?.length ?? 0)
+		);
+
+		const beforeCancellationSnapshot = await snapshot(page);
+		const beforeCancellation = refactorStoreSnapshot(
+			beforeCancellationSnapshot
+		);
+		const beforeCancellationTask = refactorPlanningTaskSnapshot(
+			beforeCancellationSnapshot
+		);
+		const cancelled = await planRefactor(page, target, {
+			cancelOnFirstPending: true
+		});
+		const afterCancellationSnapshot = await snapshot(page);
+		const afterCancellation = refactorStoreSnapshot(afterCancellationSnapshot);
+		const afterCancellationTask = refactorPlanningTaskSnapshot(
+			afterCancellationSnapshot
+		);
+		captureRefactorBridgeOperations(await snapshot(page));
+		assertInvariant(
+			'refactor-cancellation-observed-pending',
+			cancelled.pendingCount > 0
+		);
+		assertInvariant(
+			'refactor-cancellation-result',
+			cancelled.result.type === 'cancelled'
+		);
+		assertInvariant(
+			'refactor-cancellation-creates-no-plan',
+			JSON.stringify(beforeCancellation) === JSON.stringify(afterCancellation),
+			JSON.stringify({afterCancellation, beforeCancellation})
+		);
+		assertInvariant(
+			'refactor-cancellation-releases-rust-planning-task',
+			beforeCancellationTask?.refactorPlanningTaskCount === 0 &&
+				beforeCancellationTask.refactorPlanningTaskBytes === 0 &&
+				afterCancellationTask?.refactorPlanningTaskCount === 0 &&
+				afterCancellationTask.refactorPlanningTaskBytes === 0,
+			JSON.stringify({afterCancellationTask, beforeCancellationTask})
+		);
+		assertInvariant(
+			'refactor-operation-is-project-replace',
+			summaries.length === warmups + measured &&
+				summaries.every(summary => summary.operationKind === 'project-replace'),
+			JSON.stringify(summaries.map(summary => summary.operationKind))
+		);
+		assertInvariant(
+			'refactor-phase-avoids-replace-project',
+			!refactorReplaceProjectObserved
+		);
+		assertInvariant(
+			'refactor-one-worker-client-session',
+			(await snapshot(page)).renderer.core.workerClients === 1 &&
+				(await snapshot(page)).renderer.core.activeSessions === 1
+		);
+		const reviewOwnerDetail = reviewOwnerCursor
+			? await page.evaluate(
+					async ({cursor, storyId}) =>
+						(window as any).twinePerformance.refactor.detail(storyId, cursor),
+					{cursor: reviewOwnerCursor, storyId: target.storyId}
+				)
+			: undefined;
+		assertInvariant(
+			'refactor-review-owner-page-matches-current-summary',
+			reviewOwnerDetail?.type === 'page',
+			JSON.stringify(reviewOwnerDetail)
+		);
+
+		await recordMemoryDetailCheckpoint(page, 'refactor-post-detail');
+		const postDetail = await snapshot(page);
+		checkpoints.push(postDetail);
+		recordRefactorMemoryObservation(baseline, postDetail);
+		const reviewBeforeClose = await page.evaluate(
+			storyId => (window as any).twinePerformance.review.snapshot(storyId),
+			target.storyId
+		);
+		assertInvariant(
+			'refactor-review-owner-captures-bounded-dtos',
+			reviewBeforeClose.summaryCount === 1 &&
+				reviewBeforeClose.pageCount === 1 &&
+				reviewBeforeClose.encodedBytes > 0,
+			JSON.stringify(reviewBeforeClose)
+		);
+		await page.evaluate(
+			storyId => (window as any).twinePerformance.review.closeReview(storyId),
+			target.storyId
+		);
+		const reviewHeapAfterClose = await page.evaluate(() =>
+			(window as any).twinePerformance.rendererHeapAfterGarbageCollection()
+		);
+		const retainedFrontendMiB = Math.max(
+			0,
+			(reviewHeapAfterClose.usedJSHeapSize -
+				reviewHeapBeforeOwnership.usedJSHeapSize) /
+				1024 /
+				1024
+		);
+		assertInvariant(
+			'refactor-retained-frontend-renderer-heap-observed',
+			Number.isFinite(reviewHeapBeforeOwnership.usedJSHeapSize) &&
+				Number.isFinite(reviewHeapAfterClose.usedJSHeapSize),
+			JSON.stringify({
+				afterClose: reviewHeapAfterClose,
+				beforeOwnership: reviewHeapBeforeOwnership
+			})
+		);
+		await recordMemoryDetailCheckpoint(
+			page,
+			'refactor-post-close-forced-gc',
+			true
+		);
+		const reviewAfterClose = await page.evaluate(
+			storyId => (window as any).twinePerformance.review.snapshot(storyId),
+			target.storyId
+		);
+		const retained = await snapshot(page);
+		checkpoints.push(retained);
+		addSample('refactor.retainedFrontendMiB', retainedFrontendMiB);
+		assertInvariant(
+			'refactor-review-owner-released-before-gc',
+			reviewAfterClose.encodedBytes === 0 &&
+				reviewAfterClose.pageCount === 0 &&
+				reviewAfterClose.summaryCount === 0 &&
+				retained.renderer.owners?.refactorReview?.ownerCount === 0,
+			JSON.stringify({
+				aggregate: retained.renderer.owners?.refactorReview,
+				heap: {
+					afterClose: reviewHeapAfterClose,
+					beforeOwnership: reviewHeapBeforeOwnership
+				},
+				reviewAfterClose
+			})
+		);
+		assertInvariant(
+			'refactor-review-close-keeps-editor-ownership-stable',
+			retained.renderer.owners?.activeEditorCount ===
+				postDetail.renderer.owners?.activeEditorCount &&
+				retained.renderer.owners?.editorDocumentBytes ===
+					postDetail.renderer.owners?.editorDocumentBytes,
+			JSON.stringify({
+				after: retained.renderer.owners,
+				before: postDetail.renderer.owners
+			})
+		);
+		recordRefactorMemoryObservation(baseline, retained);
+		captureMemory(retained, 'refactor.memory.postClose');
+		assertInvariant(
+			'refactor-bridge-operations-observed',
+			[
+				'syncRefactorRuntime',
+				'beginProjectReplacePlan',
+				'continueProjectReplacePlan',
+				'queryRefactorPlanDetail',
+				'applyRefactorPlan',
+				'cancelProjectReplacePlan'
+			].every(kind => refactorBridgeKinds.has(kind)),
+			JSON.stringify([...refactorBridgeKinds])
+		);
+		assertInvariant(
+			'refactor-wasm-call-timing-observed',
+			[
+				'syncRefactorRuntime',
+				'beginProjectReplacePlan',
+				'continueProjectReplacePlan',
+				'queryRefactorPlanDetail',
+				'applyRefactorPlan',
+				'cancelProjectReplacePlan'
+			].every(kind => refactorBridgeKindsWithRustTiming.has(kind)),
+			JSON.stringify([...refactorBridgeKindsWithRustTiming])
+		);
+		assertInvariant(
+			'refactor-summary-measured-samples-complete',
+			(samples['refactor.summaryGenerationMs']?.length ?? 0) === measured,
+			String(samples['refactor.summaryGenerationMs']?.length ?? 0)
+		);
+		assertInvariant(
+			'refactor-typing-measured-samples-complete',
+			(samples['refactor.editPaintMs']?.length ?? 0) === measured,
+			String(samples['refactor.editPaintMs']?.length ?? 0)
+		);
+		assertInvariant(
+			'refactor-typing-stage-samples-complete',
+			[
+				'refactor.editWorkerMs',
+				'refactor.editPatchDispatchMs',
+				'refactor.editFrameWaitMs'
+			].every(name => (samples[name]?.length ?? 0) === measured),
+			JSON.stringify({
+				frameWait: samples['refactor.editFrameWaitMs']?.length ?? 0,
+				patchDispatch: samples['refactor.editPatchDispatchMs']?.length ?? 0,
+				worker: samples['refactor.editWorkerMs']?.length ?? 0
+			})
+		);
+	} finally {
+		await stopEditLongTaskObservation(page);
+	}
+
+	diagnostics.refactor = {
+		checkpoints,
+		commitSamples: 0,
+		detailSamples: measured,
+		m4CommitSamples: 0,
+		m4DetailSamples: measured,
+		m4SummarySamples: measured,
+		m4TypingSamples: measured,
+		m3DefinitionSamples: measured,
+		m3ReferenceSamples: measured,
+		operation: 'multi-operation',
+		operations: refactorOperations,
+		summarySamples: measured,
+		typingCompositorSettles
+	};
+}
+
+async function measureRefactorCommitSamples(target: RefactorFixtureTarget) {
+	for (let index = 0; index < 10; index++) {
+		const running = await launchFixture();
+		try {
+			await recordMemoryDetailCheckpoint(
+				running.page,
+				`refactor-commit-${index}-baseline`
+			);
+			const baseline = await snapshot(running.page);
+			const planning = await planRefactor(running.page, target);
+			assertInvariant(
+				`refactor-commit-${index}-plan-complete`,
+				planning.result.type === 'complete',
+				JSON.stringify(planning.result)
+			);
+			if (planning.result.type !== 'complete') continue;
+			await recordMemoryDetailCheckpoint(
+				running.page,
+				`refactor-commit-${index}-before-dispatch`
+			);
+			const preApplySnapshot = await snapshot(running.page);
+			const preApplySession = preApplySnapshot.renderer.core.hosts
+				.flatMap(host => host.sessions)
+				.at(0);
+			assertInvariant(
+				`refactor-commit-${index}-target-session-observed`,
+				preApplySession !== undefined,
+				JSON.stringify(preApplySnapshot.renderer.core.hosts)
+			);
+			const preApplySessionId = preApplySession?.sessionId;
+			const preApplyRevision = preApplySession?.revision ?? 0;
+			await running.page.evaluate(
+				({responseCheckpointName, summary, storyId}) => {
+					const probe = {
+						active: true,
+						startedAt: performance.now(),
+						promise: undefined as Promise<unknown> | undefined,
+						workerResponseCheckpoint: undefined as Promise<void> | undefined
+					};
+					(window as any).__twineRefactorApplyProbe = probe;
+					const operation = (
+						window as any
+					).twinePerformance.refactor.applyModelCommit(
+						storyId,
+						{
+							expectedProjectRevision: summary.projectRevision,
+							planId: summary.planId,
+							selection: {type: 'all'}
+						},
+						responseCheckpointName
+					);
+					probe.workerResponseCheckpoint = operation.workerResponseCheckpoint;
+					probe.promise = operation.result.finally(() => {
+						probe.active = false;
+					});
+				},
+				{
+					responseCheckpointName: `refactor-commit-${index}-worker-response`,
+					storyId: target.storyId,
+					summary: planning.result.summary
+				}
+			);
+			const applyInFlight = await running.page.evaluate(
+				() => (window as any).__twineRefactorApplyProbe?.active === true
+			);
+			assertInvariant(`refactor-commit-${index}-in-flight`, applyInFlight);
+			const commit = await running.page.evaluate(async () => {
+				const probe = (window as any).__twineRefactorApplyProbe;
+				const result = await probe.promise;
+				return {
+					durationMs: performance.now() - probe.startedAt,
+					result:
+						result.type === 'applied'
+							? {
+									patchCount: result.batch.patches.length,
+									textEditCount: result.receipt.textEdits.length,
+									type: result.type
+								}
+							: {failure: result.failure, type: result.type}
+				};
+			});
+			assertInvariant(
+				`refactor-commit-${index}-applied`,
+				commit.result.type === 'applied' &&
+					commit.result.patchCount === passageCount + 1 &&
+					commit.result.textEditCount === passageCount,
+				JSON.stringify(commit.result)
+			);
+			addSample('refactor.atomicCommitMs', commit.durationMs);
+			await running.page.evaluate(async () => {
+				const probe = (window as any).__twineRefactorApplyProbe;
+				await probe.workerResponseCheckpoint;
+			});
+			const workerResponse = await snapshot(running.page);
+			const workerResponseCheckpoint = checkpointFor(
+				workerResponse,
+				`refactor-commit-${index}-worker-response`
+			);
+			const workerResponseMetric = workerResponse.renderer.bridgeMetrics
+				.filter(
+					metric =>
+						metric.kind === 'applyRefactorPlan' &&
+						metric.workerRespondedAtEpochMs ===
+							workerResponseCheckpoint?.renderer.workerResponseAtEpochMs
+				)
+				.at(-1);
+			const committedRevision = workerResponse.renderer.core.hosts
+				.flatMap(host => host.sessions)
+				.find(session => session.sessionId === preApplySessionId)?.revision;
+			const refactorStages = workerResponseMetric?.mutationStages;
+			const refactorStageValues = refactorStages
+				? [
+						refactorStages.totalMs,
+						refactorStages.lookupAndDeltaMs,
+						refactorStages.projectMutationMs,
+						refactorStages.fingerprintMs,
+						refactorStages.graphMs,
+						refactorStages.analysisMs,
+						refactorStages.readModelMs,
+						refactorStages.historyMs,
+						refactorStages.patchFinalizeMs,
+						refactorStages.savepointMs
+					]
+				: [];
+			const refactorStageSum = refactorStages
+				? refactorStages.lookupAndDeltaMs +
+					refactorStages.projectMutationMs +
+					refactorStages.fingerprintMs +
+					refactorStages.graphMs +
+					refactorStages.analysisMs +
+					refactorStages.readModelMs +
+					refactorStages.historyMs +
+					refactorStages.patchFinalizeMs +
+					refactorStages.savepointMs
+				: undefined;
+			assertInvariant(
+				`refactor-commit-${index}-worker-response-checkpoint`,
+				workerResponseCheckpoint?.sampleCount === 1 &&
+					workerResponseMetric?.workerRespondedAtEpochMs !== undefined &&
+					workerResponseMetric.wasmMemoryBytes !== undefined &&
+					workerResponseCheckpoint.renderer.workerResponseAtEpochMs ===
+						workerResponseMetric.workerRespondedAtEpochMs &&
+					workerResponseCheckpoint.renderer.workerWasmMemoryBytes ===
+						workerResponseMetric.wasmMemoryBytes &&
+					typeof workerResponseCheckpoint.renderer.workerHeapCdpUsedBytes ===
+						'number' &&
+					typeof workerResponseCheckpoint.renderer
+						.workerHeapCdpSampledAtEpochMs === 'number' &&
+					typeof workerResponseCheckpoint.renderer.workerHeapCdpTargetId ===
+						'string' &&
+					typeof workerResponseCheckpoint.renderer
+						.workerHeapCdpResponseDriftMs === 'number' &&
+					workerResponseCheckpoint.renderer.workerHeapCdpResponseDriftMs <=
+						5_000 &&
+					refactorStages?.operation === 'refactorPlan' &&
+					refactorStages.deltaId === planning.result.summary.planId &&
+					refactorStages.revision === committedRevision &&
+					refactorStageValues.every(
+						value => Number.isFinite(value) && value >= 0
+					) &&
+					refactorStageSum !== undefined &&
+					refactorStageSum <= refactorStages.totalMs + 0.25,
+				JSON.stringify({
+					workerResponseCheckpoint: workerResponseCheckpoint
+						? {
+								sampleCount: workerResponseCheckpoint.sampleCount,
+								workerHeapCdpResponseDriftMs:
+									workerResponseCheckpoint.renderer
+										.workerHeapCdpResponseDriftMs,
+								workerResponseAtEpochMs:
+									workerResponseCheckpoint.renderer.workerResponseAtEpochMs,
+								workerWasmMemoryBytes:
+									workerResponseCheckpoint.renderer.workerWasmMemoryBytes
+							}
+						: undefined,
+					workerResponseMetric
+				})
+			);
+			assertInvariant(
+				`refactor-commit-${index}-target-session-revision-advanced`,
+				committedRevision !== undefined && committedRevision > preApplyRevision,
+				JSON.stringify({
+					committedRevision,
+					preApplyRevision,
+					preApplySessionId
+				})
+			);
+			recordRefactorMemoryObservation(baseline, workerResponse);
+			// The response-bound checkpoint is the authoritative worker/CDP tuple.
+			// A second native checkpoint here would begin only after large renderer
+			// reconciliation and therefore pair CDP with a stale worker response.
+			const postCommit = await snapshot(running.page);
+			const sampleEvents = postCommit.renderer.events.slice(
+				baseline.renderer.events.length
+			);
+			const modelCommitPatches = sampleEvents.filter(
+				event =>
+					event.name === 'renderer-patch-stages' &&
+					event.detail?.revision === committedRevision
+			);
+			assertInvariant(
+				`refactor-commit-${index}-one-renderer-patch`,
+				modelCommitPatches.length === 1,
+				JSON.stringify(modelCommitPatches)
+			);
+			const persistenceEvents = new Set([
+				'persistence-save-queued',
+				'persistence-save-started',
+				'persistence-save-completed',
+				'persistence-save-notified',
+				'persistence-save-failed',
+				'save-acknowledgement-start',
+				'save-acknowledgement-complete',
+				'save-acknowledgement-failed'
+			]);
+			assertInvariant(
+				`refactor-commit-${index}-no-persistence`,
+				sampleEvents.every(
+					event =>
+						!persistenceEvents.has(event.name) ||
+						event.detail?.revision !== committedRevision
+				),
+				JSON.stringify(sampleEvents)
+			);
+			assertInvariant(
+				`refactor-commit-${index}-bridge-apply-observed`,
+				postCommit.renderer.bridgeMetrics.some(
+					metric => metric.kind === 'applyRefactorPlan'
+				)
+			);
+			recordRefactorMemoryObservation(baseline, postCommit);
+			captureMemory(postCommit, 'refactor.memory.postCommit');
+		} finally {
+			await closeFixture(running);
+		}
+	}
+	assertInvariant(
+		'refactor-atomic-commit-samples-complete',
+		(samples['refactor.atomicCommitMs']?.length ?? 0) === 10,
+		String(samples['refactor.atomicCommitMs']?.length ?? 0)
+	);
+	if (diagnostics.refactor) diagnostics.refactor.commitSamples = 10;
+}
+
+async function measureM4DiagnosticFixCommitSamples(
+	target: M4DiagnosticFixFixtureTarget
+) {
+	for (let index = 0; index < 10; index++) {
+		const running = await launchFixture();
+		try {
+			const before = await snapshot(running.page);
+			const beforeRevision = await currentRevision(running.page);
+			const planning = await running.page.evaluate(async target => {
+				const harness = (window as any).twinePerformance;
+				return harness.refactor.planDiagnosticFixes(target.storyId, {
+					selection: {excludedDiagnosticIds: [], type: target.selection},
+					storyId: target.storyId
+				});
+			}, target);
+			assertInvariant(
+				`refactor-m4-all-safe-commit-${index}-plan-complete`,
+				planning.type === 'complete' &&
+					planning.summary.changeCount === target.expectedChangeCount,
+				JSON.stringify(planning)
+			);
+			if (planning.type !== 'complete') continue;
+			const commit = await running.page.evaluate(
+				async ({index, storyId, summary}) => {
+					const startedAt = performance.now();
+					const operation = (
+						window as any
+					).twinePerformance.refactor.applyModelCommit(
+						storyId,
+						{
+							expectedProjectRevision: summary.projectRevision,
+							planId: summary.planId,
+							selection: {type: 'all'}
+						},
+						`refactor-m4-all-safe-commit-${index}-worker-response`
+					);
+					const [result] = await Promise.all([
+						operation.result,
+						operation.workerResponseCheckpoint
+					]);
+					return {
+						durationMs: performance.now() - startedAt,
+						result:
+							result.type === 'applied'
+								? {
+										patchCount: result.batch.patches.length,
+										type: result.type
+									}
+								: {failure: result.failure, type: result.type}
+					};
+				},
+				{index, storyId: target.storyId, summary: planning.summary}
+			);
+			const appliedRevision = await waitForRevisionAfter(
+				running.page,
+				beforeRevision
+			);
+			const afterApply = await snapshot(running.page);
+			const appliedEvents = afterApply.renderer.events.slice(
+				before.renderer.events.length
+			);
+			const persistenceEvents = new Set([
+				'persistence-save-queued',
+				'persistence-save-started',
+				'persistence-save-completed',
+				'persistence-save-notified',
+				'persistence-save-failed',
+				'save-acknowledgement-start',
+				'save-acknowledgement-complete',
+				'save-acknowledgement-failed'
+			]);
+			assertInvariant(
+				`refactor-m4-all-safe-commit-${index}-one-atomic-model-transaction`,
+				commit.result.type === 'applied' &&
+					commit.result.patchCount === target.expectedChangeCount + 1 &&
+					appliedRevision === beforeRevision + 1 &&
+					appliedEvents.filter(
+						event =>
+							event.name === 'renderer-patch-stages' &&
+							event.detail?.revision === appliedRevision
+					).length === 1 &&
+					appliedEvents.some(
+						event =>
+							event.name === 'renderer-patch-stages' &&
+							event.detail?.revision === appliedRevision &&
+							event.detail?.documentUpdates === target.expectedChangeCount &&
+							event.detail?.storyActions === target.expectedChangeCount
+					) &&
+					appliedEvents.every(
+						event =>
+							!persistenceEvents.has(event.name) ||
+							event.detail?.revision !== appliedRevision
+					),
+				JSON.stringify({
+					appliedEvents,
+					appliedRevision,
+					beforeRevision,
+					commit
+				})
+			);
+			addSample('refactor.m4.allSafe.atomicCommitMs', commit.durationMs);
+			await running.page.evaluate(
+				storyId => (window as any).twinePerformance.review.closeReview(storyId),
+				target.storyId
+			);
+			await running.page.evaluate(
+				storyId =>
+					(window as any).twinePerformance.refactor.undoModelCommit(storyId),
+				target.storyId
+			);
+			const undoRevision = await waitForRevisionAfter(
+				running.page,
+				appliedRevision
+			);
+			const restored = await running.page.evaluate(async target => {
+				const harness = (window as any).twinePerformance;
+				return harness.refactor.planDiagnosticFixes(target.storyId, {
+					selection: {excludedDiagnosticIds: [], type: target.selection},
+					storyId: target.storyId
+				});
+			}, target);
+			assertInvariant(
+				`refactor-m4-all-safe-commit-${index}-undo-restores-full-batch`,
+				undoRevision === appliedRevision + 1 &&
+					restored.type === 'complete' &&
+					restored.summary.changeCount === target.expectedChangeCount,
+				JSON.stringify({appliedRevision, restored, undoRevision})
+			);
+		} finally {
+			await closeFixture(running);
+		}
+	}
+	assertInvariant(
+		'refactor-m4-all-safe-atomic-commit-samples-complete',
+		(samples['refactor.m4.allSafe.atomicCommitMs']?.length ?? 0) === 10,
+		String(samples['refactor.m4.allSafe.atomicCommitMs']?.length ?? 0)
+	);
+	if (diagnostics.refactor) diagnostics.refactor.m4CommitSamples = 10;
 }
 
 function captureMemoryDetailCheckpoints(current: PerformanceSnapshot) {
@@ -3895,17 +6341,16 @@ function captureMemoryDetailCheckpoints(current: PerformanceSnapshot) {
 		checkpoint => checkpoint.name === 'before-editor'
 	);
 	const baselineRoles = baseline
-		? processWorkingSetByRole(baseline.appMetrics)
+		? checkpointWorkingSetByRole(baseline)
 		: new Map<string, number>();
 	const baselineMainPrivateKiB = baseline?.mainProcessMemory?.private;
 	const baselineRendererPrivateKiB = baseline?.renderer.rendererPrivateKiB;
 
 	for (const checkpoint of checkpoints) {
 		const prefix = `memoryDetail.${checkpoint.name}`;
-		const workingSetKiB = checkpoint.appMetrics.reduce(
-			(total, metric) => total + (metric.memory?.workingSetSize ?? 0),
-			0
-		);
+		const workingSetKiB = [
+			...Object.values(checkpoint.processWorkingSetKiBByRole)
+		].reduce((total, value) => total + value, 0);
 
 		addSample(`${prefix}.residentMiB`, workingSetKiB / 1024);
 		addSample(
@@ -3942,9 +6387,7 @@ function captureMemoryDetailCheckpoints(current: PerformanceSnapshot) {
 				? checkpoint.renderer.rendererBlinkAllocatedKiB / 1024
 				: undefined
 		);
-		for (const [role, value] of processWorkingSetByRole(
-			checkpoint.appMetrics
-		)) {
+		for (const [role, value] of checkpointWorkingSetByRole(checkpoint)) {
 			addSample(`${prefix}.process.${role.toLowerCase()}MiB`, value / 1024);
 			addSample(
 				`${prefix}.delta.${role.toLowerCase()}MiB`,
@@ -3967,6 +6410,12 @@ function captureMemoryDetailCheckpoints(current: PerformanceSnapshot) {
 			'workerPendingRequestCount',
 			'workerReadModelCacheEntryCount',
 			'workerSessionQueueCount',
+			'workerHeapCdpUsedBytes',
+			'workerHeapCdpTotalSize',
+			'workerHeapCdpSampledAtEpochMs',
+			'workerHeapCdpResponseDriftMs',
+			'workerJsHeapUsedBytes',
+			'workerResponseAtEpochMs',
 			'workerWasmMemoryBytes',
 			'rustAnalysisCacheSourceCount',
 			'rustBacklinkCacheBytes',
@@ -4544,6 +6993,9 @@ async function writeRawPerformanceReport(testInfo: TestInfo) {
 		}
 	}
 	attempts.push(attempt);
+	const measuredRefactorOperations = diagnostics.refactor
+		? refactorOperations
+		: undefined;
 
 	await writeFile(
 		reportPath,
@@ -4560,6 +7012,13 @@ async function writeRawPerformanceReport(testInfo: TestInfo) {
 									nativeEditorActive: null,
 									profile: editProfileEnabled
 								})
+							: undefined,
+					refactor:
+						phase === 'refactor' && measuredRefactorOperations
+							? {
+									operation: 'multi-operation',
+									operations: measuredRefactorOperations
+								}
 							: undefined
 				},
 				createdAt: new Date().toISOString(),
@@ -4572,8 +7031,23 @@ async function writeRawPerformanceReport(testInfo: TestInfo) {
 				environment: {
 					metricContracts: {
 						editAttribution: 1,
-						memory: 3,
-						memoryAttribution: 1,
+						memory: 5,
+						memoryAttribution: 2,
+						...(phase === 'refactor'
+							? {
+									refactorAtomicCommit: 1,
+									atomicCommitOperation:
+										'model-commit-renderer-reconciliation-no-persistence',
+									refactorM4DiagnosticFixes: 3,
+									refactorMemory: 3,
+									...(measuredRefactorOperations
+										? {
+												refactorOperation: 'multi-operation',
+												refactorOperations: measuredRefactorOperations
+											}
+										: {})
+								}
+							: {}),
 						...(footprintEnabled ? {memoryFootprint: 1} : {}),
 						startup: 2
 					},
@@ -4601,6 +7075,7 @@ async function writeRawPerformanceReport(testInfo: TestInfo) {
 					failureKind
 				},
 				phase,
+				probeOnly: refactorProbeOnly,
 				sampleCount:
 					phase === 'diagnostic' || phase === 'memory-detail' ? 1 : undefined,
 				samples,
@@ -4673,6 +7148,88 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 			await measureMemoryDetail(running.page, running.launchToWindowMs);
 		} finally {
 			await closeFixture(running);
+		}
+	}
+
+	if (phase === 'refactor') {
+		const fixtureManifest = JSON.parse(
+			await readFile(
+				path.join(path.dirname(fixturePath), `story-${passageCount}.perf.json`),
+				'utf8'
+			)
+		) as {
+			linkCounts?: {broken?: number};
+			m3QueryTarget?: M3QueryFixtureTarget;
+			m4DiagnosticFixTarget?: M4DiagnosticFixFixtureTarget;
+			performanceFixtureMeasurementContractVersion?: number;
+			refactorTarget?: RefactorFixtureTarget;
+		};
+		assertInvariant(
+			'refactor-fixture-measurement-contract-current',
+			fixtureManifest.performanceFixtureMeasurementContractVersion === 4,
+			String(fixtureManifest.performanceFixtureMeasurementContractVersion)
+		);
+		const target = fixtureManifest.refactorTarget;
+		const m3QueryTarget = fixtureManifest.m3QueryTarget;
+		const m4Target = fixtureManifest.m4DiagnosticFixTarget;
+		assertInvariant(
+			'refactor-fixture-target-present',
+			!!target &&
+				target.storyId.length > 0 &&
+				target.passageId.length > 0 &&
+				target.beforeName !== target.afterName,
+			JSON.stringify(target)
+		);
+		if (!target)
+			throw new Error('Fixture lacks the deterministic refactor target.');
+		assertInvariant(
+			'refactor-fixture-m3-query-target-present',
+			!!m3QueryTarget &&
+				m3QueryTarget.storyId === target.storyId &&
+				m3QueryTarget.passageId.length > 0 &&
+				m3QueryTarget.passageName.length > 0 &&
+				m3QueryTarget.definitionNames.length === 20,
+			JSON.stringify(m3QueryTarget)
+		);
+		if (!m3QueryTarget)
+			throw new Error('Fixture lacks the deterministic M3 query target.');
+		assertInvariant(
+			'refactor-fixture-m4-diagnostic-fix-target-present',
+			!!m4Target &&
+				m4Target.storyId === target.storyId &&
+				m4Target.selection === 'allSafe' &&
+				m4Target.expectedChangeCount === fixtureManifest.linkCounts?.broken &&
+				m4Target.expectedChangeCount > 0,
+			JSON.stringify(m4Target)
+		);
+		if (!m4Target)
+			throw new Error('Fixture lacks the deterministic M4 diagnostic target.');
+		const running = await launchFixture();
+		try {
+			if (refactorProbeOnly) {
+				// A 100-passage fixture can complete the rename planner in one chunk, so
+				// it cannot exercise the deliberately held pending-callback workload.
+				// Keep this path probe-only: it validates the broker attribution contract
+				// without presenting 100 passages as refactor throughput evidence.
+				await verifyWorkerJsMemoryProbe(running.page, target.storyId);
+				assertInvariant('refactor-100-worker-heap-probe-only', true);
+			} else {
+				await measureRefactor(running.page, target, m3QueryTarget);
+			}
+		} finally {
+			await closeFixture(running);
+		}
+		if (!refactorProbeOnly) {
+			// M4 owns a fresh fixture process and worker session so its baseline cannot
+			// inherit project-replace plan-store or renderer ownership high water.
+			const m4Running = await launchFixture();
+			try {
+				await measureM4DiagnosticFixes(m4Running.page, m4Target);
+			} finally {
+				await closeFixture(m4Running);
+			}
+			await measureRefactorCommitSamples(target);
+			await measureM4DiagnosticFixCommitSamples(m4Target);
 		}
 	}
 

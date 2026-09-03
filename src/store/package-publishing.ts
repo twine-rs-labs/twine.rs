@@ -5,7 +5,7 @@ import type {
 } from '../core';
 import {canonicalLogicalAssetPath} from '../core/asset-paths';
 import {materializeStorySnapshotFromSession} from '../core/materialize-story';
-import type {CoreProjectHost} from '../core/project-host';
+import type {CoreProjectHost} from '../core/project-host-public';
 import type {
 	NativeProjectAssetPayloadFailure,
 	NativeProjectPackageAssetPayloadBatch

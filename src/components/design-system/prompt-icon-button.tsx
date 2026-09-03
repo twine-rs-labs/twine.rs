@@ -25,22 +25,41 @@ export interface PromptIconButtonProps {
 	value: string;
 }
 
-export const PromptIconButton: React.FC<PromptIconButtonProps> = ({
+export interface PromptPopoverProps extends Pick<
+	PromptIconButtonProps,
+	| 'cancelLabel'
+	| 'confirmLabel'
+	| 'onChange'
+	| 'onSubmit'
+	| 'prompt'
+	| 'validate'
+	| 'value'
+> {
+	anchor?: HTMLElement | null;
+	onCancel: () => void;
+	open: boolean;
+}
+
+/** A controlled prompt which may be anchored to a visible control or centered. */
+export const PromptPopover: React.FC<PromptPopoverProps> = ({
+	anchor,
 	cancelLabel,
 	confirmLabel,
-	disabled = false,
-	icon,
-	label,
 	onChange,
 	onCancel,
 	onSubmit,
+	open,
 	prompt,
 	validate,
 	value
 }) => {
-	const [open, setOpen] = React.useState(false);
-	const [position, setPosition] = React.useState<React.CSSProperties>();
-	const buttonRef = React.useRef<HTMLButtonElement | null>(null);
+	const [position, setPosition] = React.useState<React.CSSProperties>({
+		left: '50%',
+		maxWidth: 'calc(100vw - 24px)',
+		position: 'fixed',
+		top: '50%',
+		transform: 'translate(-50%, -50%)'
+	});
 	const popoverRef = React.useRef<HTMLFormElement | null>(null);
 	const validation = React.useMemo(
 		() => validate?.(value) ?? {valid: true},
@@ -48,15 +67,20 @@ export const PromptIconButton: React.FC<PromptIconButtonProps> = ({
 	);
 
 	const updatePosition = React.useCallback(() => {
-		const button = buttonRef.current;
-
-		if (!button) {
+		if (!anchor?.isConnected) {
+			setPosition({
+				left: '50%',
+				maxWidth: 'calc(100vw - 24px)',
+				position: 'fixed',
+				top: '50%',
+				transform: 'translate(-50%, -50%)'
+			});
 			return;
 		}
 
 		const gap = 8;
 		const margin = 12;
-		const buttonRect = button.getBoundingClientRect();
+		const buttonRect = anchor.getBoundingClientRect();
 		const popover = popoverRef.current;
 		const popoverWidth = popover?.offsetWidth ?? 320;
 		const popoverHeight = popover?.offsetHeight ?? 0;
@@ -77,9 +101,10 @@ export const PromptIconButton: React.FC<PromptIconButtonProps> = ({
 			left,
 			top,
 			maxWidth: `calc(100vw - ${margin * 2}px)`,
-			position: 'fixed'
+			position: 'fixed',
+			transform: undefined
 		});
-	}, []);
+	}, [anchor]);
 
 	React.useLayoutEffect(() => {
 		if (!open) {
@@ -96,23 +121,19 @@ export const PromptIconButton: React.FC<PromptIconButtonProps> = ({
 
 		function handleKeyDown(event: KeyboardEvent) {
 			if (event.key === 'Escape') {
-				setOpen(false);
-				onCancel?.();
+				event.preventDefault();
+				onCancel();
 			}
 		}
 
 		function handlePointerDown(event: PointerEvent) {
 			const target = event.target as Node;
 
-			if (
-				buttonRef.current?.contains(target) ||
-				popoverRef.current?.contains(target)
-			) {
+			if (anchor?.contains(target) || popoverRef.current?.contains(target)) {
 				return;
 			}
 
-			setOpen(false);
-			onCancel?.();
+			onCancel();
 		}
 
 		document.addEventListener('keydown', handleKeyDown);
@@ -126,7 +147,7 @@ export const PromptIconButton: React.FC<PromptIconButtonProps> = ({
 			window.removeEventListener('resize', updatePosition);
 			window.removeEventListener('scroll', updatePosition, true);
 		};
-	}, [onCancel, open, updatePosition]);
+	}, [anchor, onCancel, open, updatePosition]);
 
 	function handleSubmit(event: React.FormEvent) {
 		event.preventDefault();
@@ -136,12 +157,6 @@ export const PromptIconButton: React.FC<PromptIconButtonProps> = ({
 		}
 
 		onSubmit(value);
-		setOpen(false);
-	}
-
-	function handleCancel() {
-		onCancel?.();
-		setOpen(false);
 	}
 
 	const popover =
@@ -178,7 +193,7 @@ export const PromptIconButton: React.FC<PromptIconButtonProps> = ({
 					>
 						{confirmLabel}
 					</Button>
-					<Button icon="x" onClick={handleCancel} size="sm" variant="ghost">
+					<Button icon="x" onClick={onCancel} size="sm" variant="ghost">
 						{cancelLabel}
 					</Button>
 				</div>
@@ -186,24 +201,57 @@ export const PromptIconButton: React.FC<PromptIconButtonProps> = ({
 			document.body
 		);
 
+	return popover;
+};
+
+export const PromptIconButton: React.FC<PromptIconButtonProps> = ({
+	cancelLabel,
+	confirmLabel,
+	disabled = false,
+	icon,
+	label,
+	onChange,
+	onCancel,
+	onSubmit,
+	prompt,
+	validate,
+	value
+}) => {
+	const [open, setOpen] = React.useState(false);
+	const buttonRef = React.useRef<HTMLButtonElement | null>(null);
+
+	function handleCancel() {
+		onCancel?.();
+		setOpen(false);
+	}
+
 	return (
 		<span className="tw-prompt-icon">
 			<IconButton
 				disabled={disabled}
 				icon={icon}
 				label={label}
-				onClick={() =>
-					setOpen(value => {
-						if (value) {
-							onCancel?.();
-						}
-
-						return !value;
-					})
-				}
+				onClick={() => {
+					if (open) onCancel?.();
+					setOpen(value => !value);
+				}}
 				ref={buttonRef}
 			/>
-			{popover}
+			<PromptPopover
+				anchor={buttonRef.current}
+				cancelLabel={cancelLabel}
+				confirmLabel={confirmLabel}
+				onCancel={handleCancel}
+				onChange={onChange}
+				onSubmit={nextValue => {
+					onSubmit(nextValue);
+					setOpen(false);
+				}}
+				open={open}
+				prompt={prompt}
+				validate={validate}
+				value={value}
+			/>
 		</span>
 	);
 };

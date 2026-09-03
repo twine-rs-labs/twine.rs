@@ -4,9 +4,15 @@
 generation. It is intentionally checked in so that recaptures use the same
 story, graph, styling, and media instead of rebuilding disposable test data.
 
+`sugarcube-runtime-showcase.twee` is the synthetic SugarCube 2.36.1 story used
+to demonstrate exact-version Runtime Debugger inspection and controls added or
+expanded in v0.2.0-beta.5. Its three passages deliberately use distinct visual
+treatments so passage changes remain recognizable in screenshots.
+
 ## Capture use
 
 - Browser: import `the-glass-orchard.twine.rs/story.twee`.
+- SugarCube runtime showcase: import `sugarcube-runtime-showcase.twee`.
 - Electron: the folder is a valid split-passage project. For native Asset,
   export, and watcher screenshots, create a fresh directory project through
   the UI and import these checked-in assets through the native bridge; this

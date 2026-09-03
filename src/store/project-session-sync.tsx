@@ -9,7 +9,12 @@ import {
 	replaceKnownAssetInventoryForStory,
 	useCoreProjectHost
 } from '../core';
+import {
+	useRefactorRuntimeWriter,
+	type RefactorRuntimeWriter
+} from '../core/refactor-runtime-writer';
 import type {CoreExternalConflict} from '../core/bindings/CoreExternalConflict';
+import type {CoreProjectHost} from '../core/project-host-public';
 import {markProjectStoryHydration} from './project-hydration';
 import {
 	getProjectMetadataRevision,
@@ -45,9 +50,62 @@ function reviveSessionStory(story: StoryWithDocuments): StoryWithDocuments {
 	};
 }
 
-function rememberSessionStart(start: NativeProjectSessionStart) {
+export async function captureAndRecoverProjectSnapshot({
+	coreHost,
+	hydrateProjectFolder,
+	listProjectAssets,
+	rootPath,
+	storyId,
+	storyIds
+}: {
+	coreHost: Pick<
+		CoreProjectHost,
+		| 'abortProjectReplacement'
+		| 'acquireProjectReplacement'
+		| 'recoverFromSnapshot'
+	>;
+	hydrateProjectFolder: NonNullable<
+		TwineElectronWindow['twineElectron']
+	>['hydrateProjectFolder'];
+	listProjectAssets: NonNullable<
+		TwineElectronWindow['twineElectron']
+	>['listProjectAssets'];
+	rootPath: string;
+	storyId: string;
+	storyIds: string[] | undefined;
+}): Promise<StoryWithDocuments[]> {
+	const replacementLease = await coreHost.acquireProjectReplacement(storyId);
+	let replacementConsumed = false;
+	try {
+		const folder = await hydrateProjectFolder(rootPath, storyIds);
+		const assets = await listProjectAssets(rootPath);
+		const incoming = folder.stories.map(reviveSessionStory);
+
+		await coreHost.recoverFromSnapshot(
+			storyId,
+			incoming,
+			assets,
+			replacementLease
+		);
+		replacementConsumed = true;
+		return incoming;
+	} finally {
+		if (!replacementConsumed) {
+			await coreHost.abortProjectReplacement(storyId, replacementLease);
+		}
+	}
+}
+
+async function rememberSessionStart(
+	runtimeWriter: RefactorRuntimeWriter,
+	start: NativeProjectSessionStart
+) {
 	markPerformance('session-baseline-ready');
 	markPerformance('asset-inventory-ready');
+	await runtimeWriter.recordExternalSession(start.storyIds, {
+		generation: start.generation,
+		sessionInstanceId: start.sessionInstanceId
+	});
 
 	for (const storyId of start.storyIds) {
 		replaceKnownAssetInventoryForStory(storyId, start.assets);
@@ -85,6 +143,7 @@ function deterministicResolutionError(error: Error) {
 }
 
 interface ProjectRootLifecycleProps {
+	coreProjectHost: CoreProjectHost;
 	activeSessionInstances: React.MutableRefObject<Map<string, string>>;
 	bufferedSessionDeltas: React.MutableRefObject<
 		Map<string, NativeProjectSessionDelta[]>
@@ -92,6 +151,7 @@ interface ProjectRootLifecycleProps {
 	deltaQueueRef: React.MutableRefObject<NativeProjectDeltaQueue<NativeProjectSessionDelta> | null>;
 	fingerprint: string;
 	rootPath: string;
+	runtimeWriter: RefactorRuntimeWriter;
 	sessionCleanupRef: React.MutableRefObject<Map<string, Promise<void>>>;
 	clearReviewsForRoot: (rootPath: string) => void;
 	setError: React.Dispatch<React.SetStateAction<string | undefined>>;
@@ -102,10 +162,12 @@ interface ProjectRootLifecycleProps {
 
 const ProjectRootLifecycle: React.FC<ProjectRootLifecycleProps> = ({
 	activeSessionInstances,
+	coreProjectHost,
 	bufferedSessionDeltas,
 	deltaQueueRef,
 	fingerprint,
 	rootPath,
+	runtimeWriter,
 	sessionCleanupRef,
 	clearReviewsForRoot,
 	setError,
@@ -136,12 +198,20 @@ const ProjectRootLifecycle: React.FC<ProjectRootLifecycleProps> = ({
 				return true;
 			}
 			activeSessionInstances.current.set(rootPath, start.sessionInstanceId);
+			await runtimeWriter.recordExternalSession(storyIds, {
+				generation: start.generation,
+				sessionInstanceId: start.sessionInstanceId
+			});
 			startingSessionRoots.current.delete(rootPath);
 			const buffered = bufferedSessionDeltas.current.get(rootPath) ?? [];
 
 			bufferedSessionDeltas.current.delete(rootPath);
 			for (const delta of buffered) {
 				if (delta.sessionInstanceId === start.sessionInstanceId) {
+					await runtimeWriter.recordExternalSession(storyIds, {
+						generation: delta.candidateGeneration,
+						sessionInstanceId: delta.sessionInstanceId
+					});
 					deltaQueueRef.current?.enqueue(delta);
 				}
 			}
@@ -169,6 +239,10 @@ const ProjectRootLifecycle: React.FC<ProjectRootLifecycleProps> = ({
 		return () => {
 			canceled = true;
 			clearReviewsForRoot(rootPath);
+			const sessionInstanceId = activeSessionInstances.current.get(rootPath);
+			if (sessionInstanceId) {
+				void runtimeWriter.clearExternalSession(storyIds, sessionInstanceId);
+			}
 			activeSessionInstances.current.delete(rootPath);
 			startingSessionRoots.current.delete(rootPath);
 			bufferedSessionDeltas.current.delete(rootPath);
@@ -193,10 +267,12 @@ const ProjectRootLifecycle: React.FC<ProjectRootLifecycleProps> = ({
 		};
 	}, [
 		activeSessionInstances,
+		coreProjectHost,
 		bufferedSessionDeltas,
 		deltaQueueRef,
 		fingerprint,
 		rootPath,
+		runtimeWriter,
 		sessionCleanupRef,
 		clearReviewsForRoot,
 		setError,
@@ -211,6 +287,7 @@ const ProjectRootLifecycle: React.FC<ProjectRootLifecycleProps> = ({
 export const ProjectSessionSync: React.FC = () => {
 	const {stories} = useStoriesContext();
 	const coreProjectHost = useCoreProjectHost();
+	const runtimeWriter = useRefactorRuntimeWriter();
 	const [metadataRevision, setMetadataRevision] = React.useState(
 		getProjectMetadataRevision
 	);
@@ -372,7 +449,7 @@ export const ProjectSessionSync: React.FC = () => {
 						delta.id
 					);
 
-					rememberSessionStart(start);
+					await rememberSessionStart(runtimeWriter, start);
 					recordPerformanceHarnessEvent('watcher-acknowledgement-complete', {
 						attempt: attempt + 1,
 						deltaId: delta.id,
@@ -489,7 +566,8 @@ export const ProjectSessionSync: React.FC = () => {
 			beginReviewClassification,
 			completeReviewClassification,
 			coreProjectHost,
-			queueReview
+			queueReview,
+			runtimeWriter
 		]
 	);
 
@@ -510,14 +588,14 @@ export const ProjectSessionSync: React.FC = () => {
 
 	const synchronizeStartAssets = React.useCallback(
 		async (start: NativeProjectSessionStart) => {
-			rememberSessionStart(start);
+			await rememberSessionStart(runtimeWriter, start);
 			const targetStoryId = rootStoriesRef.current.get(start.rootPath)?.[0]?.id;
 
 			if (targetStoryId) {
 				await coreProjectHost.ensureSessionReady(targetStoryId);
 			}
 		},
-		[coreProjectHost]
+		[coreProjectHost, runtimeWriter]
 	);
 
 	React.useLayoutEffect(() => {
@@ -543,15 +621,29 @@ export const ProjectSessionSync: React.FC = () => {
 				if (activeInstance !== delta.sessionInstanceId) {
 					return;
 				}
-
-				recordPerformanceHarnessEvent('watcher-delta-observed', {
-					changedPaths: delta.changedPaths.length,
-					deltaId: delta.id,
-					entityChanges: delta.delta.changes.length,
-					nativeTrace: delta.performanceTrace,
-					recovery: !!delta.recovery
-				});
-				deltaQueueRef.current?.enqueue(delta);
+				void (async () => {
+					try {
+						// The runtime generation must be serialized before the ingest work
+						// enters its queue, otherwise a concurrent plan can miss this delta.
+						await runtimeWriter.recordExternalSession(
+							rootStoryIds.current.get(delta.rootPath) ?? [],
+							{
+								generation: delta.candidateGeneration,
+								sessionInstanceId: delta.sessionInstanceId
+							}
+						);
+						recordPerformanceHarnessEvent('watcher-delta-observed', {
+							changedPaths: delta.changedPaths.length,
+							deltaId: delta.id,
+							entityChanges: delta.delta.changes.length,
+							nativeTrace: delta.performanceTrace,
+							recovery: !!delta.recovery
+						});
+						deltaQueueRef.current?.enqueue(delta);
+					} catch (error) {
+						setError((error as Error).message);
+					}
+				})();
 			});
 		}
 	}, [twineElectron]);
@@ -581,20 +673,14 @@ export const ProjectSessionSync: React.FC = () => {
 				) {
 					return;
 				}
-				const folder = await twineElectron.hydrateProjectFolder(
-					pendingReview.rootPath,
-					rootStoryIds.current.get(pendingReview.rootPath)
-				);
-				const assets = await twineElectron.listProjectAssets(
-					pendingReview.rootPath
-				);
-				const incoming = folder.stories.map(reviveSessionStory);
-
-				await coreProjectHost.recoverFromSnapshot(
-					targetStoryId,
-					incoming,
-					assets
-				);
+				const incoming = await captureAndRecoverProjectSnapshot({
+					coreHost: coreProjectHost,
+					hydrateProjectFolder: twineElectron.hydrateProjectFolder,
+					listProjectAssets: twineElectron.listProjectAssets,
+					rootPath: pendingReview.rootPath,
+					storyId: targetStoryId,
+					storyIds: rootStoryIds.current.get(pendingReview.rootPath)
+				});
 				for (const story of incoming) {
 					saveProjectMetadata(story.id, {
 						rootPath: pendingReview.rootPath,
@@ -646,7 +732,7 @@ export const ProjectSessionSync: React.FC = () => {
 				pendingReview.delta.id
 			);
 
-			rememberSessionStart(start);
+			await rememberSessionStart(runtimeWriter, start);
 			if (rootStories[0]) {
 				const status = coreProjectHost.sessionStatus(rootStories[0].id);
 
@@ -714,11 +800,13 @@ export const ProjectSessionSync: React.FC = () => {
 				return (
 					<ProjectRootLifecycle
 						activeSessionInstances={activeSessionInstances}
+						coreProjectHost={coreProjectHost}
 						bufferedSessionDeltas={bufferedSessionDeltas}
 						deltaQueueRef={deltaQueueRef}
 						fingerprint={fingerprint}
 						key={rootPath}
 						rootPath={rootPath}
+						runtimeWriter={runtimeWriter}
 						sessionCleanupRef={sessionCleanupRef}
 						clearReviewsForRoot={clearReviewsForRoot}
 						setError={setError}

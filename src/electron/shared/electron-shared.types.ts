@@ -566,7 +566,10 @@ export interface NativeAddLocalStoryFormatResult {
 
 export interface TwineElectronWindow extends Window {
 	twinePerformanceNative?: {
-		checkpoint(name: string, renderer: Record<string, number>): Promise<void>;
+		checkpoint(
+			name: string,
+			renderer: Record<string, number | string | undefined>
+		): Promise<void>;
 		collectGarbage(): Promise<void>;
 		reconcileProjectSession(
 			rootPath: string

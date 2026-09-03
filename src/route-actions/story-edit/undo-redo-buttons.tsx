@@ -1,6 +1,7 @@
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
 import {IconButton} from '../../components/design-system';
+import {useAppCommandContribution} from '../../components/app-shell';
 import type {CoreHistoryKind} from '../../core/bindings/CoreHistoryKind';
 import {useCoreProjectSession} from '../../core';
 
@@ -24,6 +25,7 @@ const historyTranslation: Record<CoreHistoryKind, string> = {
 	renamePassage: 'renamePassage',
 	renameStory: 'renameStory',
 	renameTag: 'renameTag',
+	refactor: 'changeStoryDetails',
 	replaceAsset: 'changeStoryDetails',
 	saveLayout: 'movePassage',
 	setStartPassage: 'changeStoryDetails',
@@ -58,9 +60,36 @@ export const UndoRedoButtons: React.FC<UndoRedoButtonsProps> = ({storyId}) => {
 		: t('common.redo');
 
 	React.useEffect(() => host.subscribeToStatus(setStatus), [host]);
+	useAppCommandContribution('story-edit.undo-redo', [
+		{
+			contextKey: `${storyId ?? 'project'}:${status.revision}`,
+			disabled: !status.canUndo,
+			disabledReason: status.canUndo ? undefined : 'Nothing to undo',
+			group: 'Toolbar',
+			icon: 'arrow-back',
+			id: 'story-edit.undo',
+			label: undoLabel,
+			run: async () => {
+				await host.undo();
+			}
+		},
+		{
+			contextKey: `${storyId ?? 'project'}:${status.revision}`,
+			disabled: !status.canRedo,
+			disabledReason: status.canRedo ? undefined : 'Nothing to redo',
+			group: 'Toolbar',
+			icon: 'arrow-forward',
+			id: 'story-edit.redo',
+			label: redoLabel,
+			run: async () => {
+				await host.redo();
+			}
+		}
+	]);
 
 	React.useEffect(() => {
 		function handleKeyDown(event: KeyboardEvent) {
+			if (event.isComposing) return;
 			const key = event.key.toLowerCase();
 			const redoRequested =
 				(event.shiftKey && key === 'z') || (event.ctrlKey && key === 'y');

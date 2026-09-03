@@ -93,7 +93,8 @@ export function saveMiddleware(state: StoriesState, action: StoriesAction) {
 				...action.actions.flatMap(action =>
 					'storyId' in action ? [action.storyId] : []
 				),
-				...(action.documentUpdates ?? []).map(update => update.storyId)
+				...(action.documentUpdates ?? []).map(update => update.storyId),
+				...(action.persistenceHints ?? []).map(hint => hint.storyId)
 			]);
 			const deletedStoryIds = new Set(
 				action.actions.flatMap(action =>
@@ -133,6 +134,18 @@ export function saveMiddleware(state: StoriesState, action: StoriesAction) {
 				const ids = touchedPassagesByStory.get(update.storyId) ?? new Set();
 				ids.add(update.passageId);
 				touchedPassagesByStory.set(update.storyId, ids);
+			}
+			for (const hint of action.persistenceHints ?? []) {
+				if (
+					hint.type !== 'passageText' &&
+					hint.type !== 'passageMetadata' &&
+					hint.type !== 'passageLayout'
+				) {
+					continue;
+				}
+				const ids = touchedPassagesByStory.get(hint.storyId) ?? new Set();
+				ids.add(hint.passageId);
+				touchedPassagesByStory.set(hint.storyId, ids);
 			}
 
 			doUpdateTransaction(transaction => {

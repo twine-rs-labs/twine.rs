@@ -1,6 +1,7 @@
 import classNames from 'classnames';
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
+import {useNavigate} from 'react-router';
 import {
 	Badge,
 	Button,
@@ -21,7 +22,6 @@ import {
 	useCoreSourceDocument
 } from '../../core';
 import type {CoreStoryIndex, WorkbenchSelection} from '../../core';
-import {quickFixActionsForDiagnostic} from '../../core/quick-fix-registry';
 import {Passage, Story, storyPassageTags} from '../../store/stories';
 import {defaults, usePrefsContext} from '../../store/prefs';
 import {useStoryFormatsContext} from '../../store/story-formats';
@@ -36,8 +36,13 @@ import {
 	type LegacyStreamModeAdapter
 } from '../../util/story-format/legacy-editor/legacy-stream-mode';
 import {useNativeEditorSession} from '../../util/story-format';
-import type {EditorWindowSpec} from './editor-window-spec';
+import {editorWindowId, type EditorWindowSpec} from './editor-window-spec';
+import type {SourceNavigationFocusIntent} from './source-navigation';
 import {StoryFormatToolbar} from './story-format-toolbar';
+import {
+	contextualDiagnosticQuickFixes,
+	diagnosticFixReviewNavigationState
+} from '../diagnostics/diagnostic-fix-navigation';
 
 export interface EditorWindowProps {
 	active: boolean;
@@ -46,10 +51,23 @@ export interface EditorWindowProps {
 	onDragEnd?: (event: React.DragEvent<HTMLDivElement>) => void;
 	onDragStart?: (event: React.DragEvent<HTMLDivElement>) => void;
 	onFocus: () => void;
+	onLocalBufferChange?: () => void;
+	onRevealApplied?: (
+		editorId: string,
+		requestKey: number,
+		restoreToken?: string
+	) => void;
 	onRevealPassageInGraph?: (passage: Passage) => void;
+	preserveFocusOnMount?: boolean;
 	onSelectPassage?: (passage: Passage) => void;
 	onTestPassage?: (passage: Passage) => void;
-	revealRequest?: {key: number; position?: number};
+	revealRequest?: {
+		end?: number;
+		focus?: SourceNavigationFocusIntent;
+		key: number;
+		position?: number;
+		restoreToken?: string;
+	};
 	searchRequest?: {key: number; query?: string};
 	selection?: WorkbenchSelection;
 	spec: EditorWindowSpec;
@@ -88,6 +106,8 @@ interface ResolvedBuffer {
 	memoryKey: string;
 	name: string;
 	passage?: Passage;
+	sourceId: string;
+	sourceKind: 'passage' | 'script' | 'stylesheet';
 	value: string;
 }
 
@@ -228,6 +248,8 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 		onDragEnd,
 		onDragStart,
 		onFocus,
+		onLocalBufferChange,
+		onRevealApplied,
 		onRevealPassageInGraph,
 		onSelectPassage,
 		onTestPassage,
@@ -240,6 +262,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 		testPassagePendingId
 	} = props;
 	const {t} = useTranslation();
+	const navigate = useNavigate();
 	const coreProjectHost = useCoreProjectHost();
 	const {dispatch: prefsDispatch, prefs} = usePrefsContext();
 	const {dispatch: storyFormatsDispatch} = useStoryFormatsContext();
@@ -248,6 +271,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 		story.storyFormatVersion
 	);
 	const [editor, setEditor] = React.useState<SourceEditorHandle>();
+	const editorRef = React.useRef<SourceEditorHandle | undefined>(undefined);
 	const [readyBufferId, setReadyBufferId] = React.useState<string>();
 	const [adapterFailure, setAdapterFailure] = React.useState<Error>();
 	const [bufferSaveError, setBufferSaveError] = React.useState<Error>();
@@ -281,6 +305,8 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 				language: 'javascript',
 				memoryKey: `${story.id}:script`,
 				name: t('routes.storyEdit.toolbar.javaScript'),
+				sourceId: story.id,
+				sourceKind: 'script',
 				value: scriptDocument.document?.text ?? story.script
 			};
 		}
@@ -291,6 +317,8 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 				language: 'css',
 				memoryKey: `${story.id}:stylesheet`,
 				name: t('routes.storyEdit.toolbar.stylesheet'),
+				sourceId: story.id,
+				sourceKind: 'stylesheet',
 				value: stylesheetDocument.document?.text ?? story.stylesheet
 			};
 		}
@@ -301,6 +329,8 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 			memoryKey: passage ? `${story.id}:${passage.id}` : `${story.id}:passage`,
 			name: passage?.name ?? t('routes.storyEdit.workspace.noPassages'),
 			passage,
+			sourceId: passage?.id ?? '',
+			sourceKind: 'passage',
 			value: passageDocument.document?.text ?? ''
 		};
 	}, [
@@ -358,14 +388,8 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 		[index.diagnostics, passage]
 	);
 	const inlineQuickFixes = React.useMemo(
-		() =>
-			inlineDiagnostics
-				.flatMap(diagnostic =>
-					quickFixActionsForDiagnostic(coreProjectHost, story, diagnostic)
-				)
-				.filter(action => action.enabled)
-				.slice(0, 3),
-		[coreProjectHost, inlineDiagnostics, story]
+		() => contextualDiagnosticQuickFixes(inlineDiagnostics).slice(0, 3),
+		[inlineDiagnostics]
 	);
 	const passageTags = React.useMemo(() => storyPassageTags(story), [story]);
 
@@ -465,6 +489,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 			rendererQuitQuiescence.registerBuffer({
 				closeAdmission() {
 					acceptingTextChanges.current = false;
+					editorRef.current?.setReadOnly?.(true);
 					setQuitReadOnly(true);
 				},
 				flush: flushPendingText,
@@ -479,16 +504,49 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 	React.useLayoutEffect(
 		() =>
 			workbenchBufferCoordinator.register({
+				applyRefactorTextEdits(edits) {
+					const current = editorRef.current?.getSnapshot().document;
+					if (
+						current === undefined ||
+						edits.some(
+							edit => current.slice(edit.start, edit.end) !== edit.expectedText
+						)
+					)
+						return false;
+					editorRef.current?.applyAuthoritativeEdits(
+						edits.map(edit => ({
+							from: edit.start,
+							to: edit.end,
+							insert: edit.replacementText
+						}))
+					);
+					return true;
+				},
 				bufferId: buffer.id,
+				closeAdmission() {
+					acceptingTextChanges.current = false;
+					editorRef.current?.setReadOnly?.(true);
+					setQuitReadOnly(true);
+				},
 				flush: flushPendingText,
 				hasPendingChanges: () =>
 					pendingText.current !== undefined ||
 					pendingCommit.current !== undefined ||
 					failedPersistenceText.current !== undefined,
+				isComposing: () => editorRef.current?.isComposing?.() ?? false,
 				revision: () => editRevision.current,
-				storyId: story.id
+				reopenAdmission() {
+					if (!rendererQuitQuiescence.isDraining) {
+						acceptingTextChanges.current = true;
+						editorRef.current?.setReadOnly?.(false);
+						setQuitReadOnly(false);
+					}
+				},
+				storyId: story.id,
+				sourceId: buffer.sourceId,
+				sourceKind: buffer.sourceKind
 			}),
-		[buffer.id, flushPendingText, story.id]
+		[buffer.id, buffer.sourceId, buffer.sourceKind, flushPendingText, story.id]
 	);
 
 	// Flush any pending edit when the buffer changes or the window closes.
@@ -538,6 +596,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 
 			currentLocalText.current = text;
 			editRevision.current++;
+			onLocalBufferChange?.();
 			setLocalText(text);
 			expectedText.current = text;
 			pendingText.current = text;
@@ -552,7 +611,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 				void commitBufferedText(text).catch(() => undefined);
 			}, 300);
 		},
-		[commitBufferedText, passage, spec.kind]
+		[commitBufferedText, onLocalBufferChange, passage, spec.kind]
 	);
 
 	const handleClose = React.useCallback(async () => {
@@ -656,10 +715,12 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 			? formatIntegration.codeMirror
 			: undefined;
 	const handleEditorRef = React.useCallback(
-		(instance: SourceEditorHandle | null) =>
+		(instance: SourceEditorHandle | null) => {
+			editorRef.current = instance ?? undefined;
 			setEditor(current =>
 				current === (instance ?? undefined) ? current : (instance ?? undefined)
-			),
+			);
+		},
 		[]
 	);
 
@@ -1136,6 +1197,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 							setAdapterFailure(error);
 						}}
 						placeholderText={t('dialogs.passageEdit.passageTextPlaceholder')}
+						preserveFocusOnMount={props.preserveFocusOnMount}
 						readOnly={quitReadOnly}
 						ref={handleEditorRef}
 						replaceGenericTwineSyntax={
@@ -1145,6 +1207,14 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 							revealRequest?.position !== undefined
 								? {
 										key: revealRequest.key,
+										end: revealRequest.end,
+										focus: revealRequest.focus,
+										onApplied: () =>
+											onRevealApplied?.(
+												editorWindowId(spec),
+												revealRequest.key,
+												revealRequest.restoreToken
+											),
 										position: revealRequest.position
 									}
 								: undefined
@@ -1197,17 +1267,32 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 					<TablerIcon icon="alert-octagon" />
 					<strong>{t('routes.storyEdit.workspace.brokenLinks')}</strong>
 					<span>{brokenLinks.join(', ')}</span>
-					{inlineQuickFixes.map(action => (
-						<Button
-							icon="wand"
-							key={action.command}
-							onClick={action.apply}
-							size="sm"
-							variant="ghost"
-						>
-							{action.title}
-						</Button>
-					))}
+					{inlineQuickFixes.map(({action, diagnostic}) =>
+						action.applicability === 'automatic' ? (
+							<Button
+								icon="wand"
+								key={`${diagnostic.sourceId}:${diagnostic.start}:${action.command}`}
+								onClick={() =>
+									navigate(`/stories/${story.id}/diagnostics`, {
+										state: diagnosticFixReviewNavigationState(
+											diagnostic,
+											action.command
+										)
+									})
+								}
+								size="sm"
+								variant="ghost"
+							>
+								Review {action.title}
+							</Button>
+						) : (
+							<span
+								key={`${diagnostic.sourceId}:${diagnostic.start}:${action.command}`}
+							>
+								Manual: {action.title}
+							</span>
+						)
+					)}
 					{outgoingPassages.length > 0 && onSelectPassage && (
 						<Button
 							icon="arrow-up-right"

@@ -1,0 +1,8 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"rootDir": ".",
+		"types": ["node", "vite/client"]
+	},
+	"include": ["e2e/electron-performance.spec.ts", "src/externals.d.ts"]
+}

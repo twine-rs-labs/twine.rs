@@ -3,9 +3,9 @@ import {
 	useCorePassageDocument,
 	useCoreSourceDocument
 } from '../passage-document';
-import {useCoreProjectHost} from '../project-host';
+import {useCoreProjectHost} from '../project-host-public';
 
-jest.mock('../project-host', () => ({useCoreProjectHost: jest.fn()}));
+jest.mock('../project-host-public', () => ({useCoreProjectHost: jest.fn()}));
 
 describe('Core document persistence retries', () => {
 	const host = {

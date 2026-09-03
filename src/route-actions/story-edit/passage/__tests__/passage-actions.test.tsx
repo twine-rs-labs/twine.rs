@@ -20,6 +20,7 @@ const TestPassageActions: React.FC<Partial<PassageActionsProps>> = props => {
 			getCenter={() => ({left: 0, top: 0})}
 			onEditPassages={jest.fn()}
 			onOpenFuzzyFinder={jest.fn()}
+			onRenamePassage={jest.fn()}
 			story={stories[0]}
 			{...props}
 		/>
@@ -56,17 +57,43 @@ describe('<PassageActions>', () => {
 		).toBeInTheDocument();
 	});
 
-	it('displays a passage rename button that renames a passage', async () => {
+	it('forwards a passage rename intent without immediately renaming it', async () => {
 		const story = fakeStory(1);
+		const onRenamePassage = jest.fn();
 
 		story.passages[0].selected = true;
-		await renderComponent({story}, {stories: [story]});
+		await renderComponent({onRenamePassage, story}, {stories: [story]});
 		fireEvent.click(
 			screen.getByText(`mock-rename-passage-button-${story.passages[0].id}`)
 		);
+		expect(onRenamePassage).toHaveBeenCalledWith(
+			'mock-new-passage-name',
+			story.passages[0],
+			expect.any(Function)
+		);
 		expect(
 			screen.getByTestId(`passage-${story.passages[0].id}`).dataset.name
-		).toBe('mock-new-passage-name');
+		).toBe(story.passages[0].name);
+	});
+
+	it('provides route ownership with a callback that restores toolbar focus', async () => {
+		const story = fakeStory(1);
+		const onRenamePassage = jest.fn();
+		story.passages[0].selected = true;
+		const requestAnimationFrameSpy = jest
+			.spyOn(window, 'requestAnimationFrame')
+			.mockImplementation(callback => {
+				callback(0);
+				return 1;
+			});
+		await renderComponent({onRenamePassage, story}, {stories: [story]});
+		const renameButton = screen.getByText(
+			`mock-rename-passage-button-${story.passages[0].id}`
+		);
+		fireEvent.click(renameButton);
+		(onRenamePassage.mock.calls[0][2] as () => void)();
+		expect(renameButton).toHaveFocus();
+		requestAnimationFrameSpy.mockRestore();
 	});
 
 	it('displays a passage delete button', async () => {
