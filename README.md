@@ -110,9 +110,10 @@ Builds the renderer and Electron main process, then launches the desktop app.
 npm run start:docs
 ```
 
-Serves the inherited Twine compatibility manual from `docs/en`. The current
-twine.rs architecture, status, roadmap, and product documentation starts at
-[`docs/README.md`](docs/README.md).
+Serves the primary Twine RS User Manual from `docs/en`. Its task chapters
+cover the current desktop and browser workflows; upstream release notes remain
+in a clearly labeled historical appendix. The application Help entry remains
+[`docs/user/README.md`](docs/user/README.md).
 
 ## Build and Check
 

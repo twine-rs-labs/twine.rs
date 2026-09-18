@@ -12,7 +12,10 @@ example, has [CSS](https://developer.mozilla.org/en-US/docs/Learn/CSS) and
 [JS](https://developer.mozilla.org/en-US/docs/Learn/JavaScript) learning areas
 which contain gentle tutorials on both these technologies.
 
-To edit a story's CSS, choose _Stylesheet_ from the _Story_ top toolbar tab. To
-edit a story's JavaScript, choose _JavaScript_ from the _Story_ top toolbar tab.
-Like passage edit dialogs, these dialogs automatically save changes a moment
-after you stop typing.
+Choose the **Story** action tab, then **Stylesheet** or **JavaScript**. Each
+opens a source buffer in the workbench editor dock. Reopening the same source
+focuses its existing buffer. Changes are committed after typing pauses; check
+the save status before closing the app.
+
+While editing, the focused buffer has its own text Undo/Redo. See
+[Undoing and Redoing](undoing.md) for the distinction from project history.

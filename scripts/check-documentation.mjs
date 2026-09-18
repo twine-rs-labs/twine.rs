@@ -154,7 +154,7 @@ export function checkMarkdownFiles({
 			) {
 				const line = contents.slice(0, match.index).split('\n').length;
 				failures.push(
-					`${relativeFile}:${line}: local compatibility-manual link escapes docs/en/src (${target}); use an explicit external or repository URL`
+					`${relativeFile}:${line}: local user-manual link escapes docs/en/src (${target}); use an explicit external or repository URL`
 				);
 				continue;
 			}
@@ -222,41 +222,206 @@ export function checkHtmlResources({root, htmlRoot = 'docs/design-system'}) {
 	return {failures, files};
 }
 
-export function checkCompatibilityManual({root}) {
+export const userManualTitle = 'Twine RS User Manual';
+export const userManualLandingMarker =
+	'<!-- documentation-class: twine-rs-user-manual -->';
+export const userManualScopePhrase =
+	'This manual describes the shipped Twine RS desktop and browser editors.';
+export const userManualLinks = [
+	{
+		label: 'documentation map',
+		url: 'https://github.com/twine-rs-labs/twine.rs/blob/main/docs/README.md'
+	},
+	{
+		label: 'user documentation',
+		url: 'https://github.com/twine-rs-labs/twine.rs/blob/main/docs/user/README.md'
+	}
+];
+export const upstreamHistoryMarker =
+	'<!-- documentation-class: upstream-history -->';
+export const upstreamHistoryPhrase =
+	'Historical upstream Twine documentation; not Twine RS release notes.';
+export const legacyUserManualLanding = {
+	source: 'README.md',
+	heading: 'Twine RS user documentation',
+	anchor: 'twiners-user-documentation',
+	target: '../en/src/README.md'
+};
+export const legacyUserManualHeadingMap = [
+	{
+		source: 'availability-and-updates.md',
+		heading: 'Twine RS availability and updates',
+		target: 'getting-started/installing.md#installing-twine-rs'
+	},
+	{
+		source: 'availability-and-updates.md',
+		heading: 'Updates',
+		target: 'getting-started/updating.md#updating-twine-rs'
+	},
+	...[
+		'Story-graph navigation',
+		'Move around the graph',
+		'Select and edit passages'
+	].map(heading => ({
+		source: 'graph-navigation.md',
+		heading,
+		target: `editing-stories/navigating.md#${markdownAnchorSlug(heading)}`
+	})),
+	...[
+		'Desktop command line',
+		'Launch the application',
+		'Supported options',
+		'Folder safety'
+	].map(heading => ({
+		source: 'desktop-command-line.md',
+		heading,
+		target: `customizing/command-line.md#${markdownAnchorSlug(heading)}`
+	})),
+	...[
+		'Desktop recovery and backups',
+		'Story-library and backup locations',
+		'Restore a project from a backup',
+		'Test with an isolated library',
+		'Interrupted operations',
+		'Choose dedicated folders'
+	].map(heading => ({
+		source: 'recovery-and-backups.md',
+		heading,
+		target: `troubleshooting/backups.md#${markdownAnchorSlug(heading)}`
+	})),
+	{
+		source: 'recovery-and-backups.md',
+		heading: 'Recovering from damaged settings',
+		target: 'troubleshooting/wont-start.md#recovering-from-damaged-settings'
+	}
+];
+
+function markdownAnchorSlug(heading) {
+	return heading
+		.toLowerCase()
+		.replace(/<[^>]+>/gu, '')
+		.replace(/[^\p{L}\p{N}\s-]/gu, '')
+		.trim()
+		.replace(/\s+/gu, '-');
+}
+
+function markdownHeadings(contents) {
+	const headings = [];
+	let fenced = false;
+	let fence;
+	let offset = 0;
+
+	for (const line of contents.split(/\n/u)) {
+		const fenceMatch = line.match(/^\s*(`{3,}|~{3,})/u);
+		if (fenceMatch) {
+			if (!fenced) {
+				fenced = true;
+				fence = fenceMatch[1][0];
+			} else if (fenceMatch[1][0] === fence) {
+				fenced = false;
+				fence = undefined;
+			}
+			offset += line.length + 1;
+			continue;
+		}
+
+		if (!fenced) {
+			const match = line.match(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/u);
+			if (match) {
+				const explicitId = match[1].match(/\s*\{#([^}\s]+)\}\s*$/u);
+				const text = match[1].replace(/\s*\{#[^}\s]+\}\s*$/u, '').trim();
+				headings.push({
+					anchor: explicitId?.[1] ?? markdownAnchorSlug(text),
+					offset: offset + line.length,
+					slug: markdownAnchorSlug(text)
+				});
+			}
+		}
+
+		offset += line.length + 1;
+	}
+
+	return headings;
+}
+
+function markdownAnchors(contents) {
+	const anchors = new Set(markdownHeadings(contents).map(({anchor}) => anchor));
+	let fenced = false;
+	let fence;
+
+	for (const line of contents.split(/\n/u)) {
+		const fenceMatch = line.match(/^\s*(`{3,}|~{3,})/u);
+		if (fenceMatch) {
+			if (!fenced) {
+				fenced = true;
+				fence = fenceMatch[1][0];
+			} else if (fenceMatch[1][0] === fence) {
+				fenced = false;
+				fence = undefined;
+			}
+			continue;
+		}
+
+		if (!fenced) {
+			for (const match of line.matchAll(
+				/<[^>]+\bid\s*=\s*["']([^"']+)["'][^>]*>/giu
+			)) {
+				anchors.add(match[1]);
+			}
+		}
+	}
+
+	return anchors;
+}
+
+function htmlAnchorIds(contents) {
+	const anchors = new Set();
+	let fenced = false;
+	let fence;
+
+	for (const line of contents.split(/\n/u)) {
+		const fenceMatch = line.match(/^\s*(`{3,}|~{3,})/u);
+		if (fenceMatch) {
+			if (!fenced) {
+				fenced = true;
+				fence = fenceMatch[1][0];
+			} else if (fenceMatch[1][0] === fence) {
+				fenced = false;
+				fence = undefined;
+			}
+			continue;
+		}
+
+		if (!fenced) {
+			for (const match of line.matchAll(
+				/<a\b[^>]*\bid\s*=\s*["']([^"']+)["'][^>]*>/giu
+			)) {
+				anchors.add(match[1]);
+			}
+		}
+	}
+
+	return anchors;
+}
+
+export function checkUserManual({root}) {
 	const failures = [];
 	const bookFile = resolve(root, 'docs/en/book.toml');
 	const landingFile = resolve(root, 'docs/en/src/README.md');
-	const titlePattern =
-		/^\s*title\s*=\s*"Twine compatibility manual \(upstream\)"\s*(?:#.*)?$/mu;
-	const ownershipMarker =
-		'<!-- documentation-class: upstream-compatibility -->';
-	const scopePhrases = [
-		'predominantly the upstream twine',
-		'not yet an authoritative guide to every twine.rs workflow'
-	];
-	const canonicalLinks = [
-		{
-			label: 'twine.rs documentation map',
-			url: 'https://github.com/twine-rs-labs/twine.rs/blob/main/docs/README.md'
-		},
-		{
-			label: 'user-documentation status',
-			url: 'https://github.com/twine-rs-labs/twine.rs/blob/main/docs/user/README.md'
-		}
-	];
+	const titlePattern = /^\s*title\s*=\s*"Twine RS User Manual"\s*(?:#.*)?$/mu;
 
 	if (
 		!existsSync(bookFile) ||
 		!titlePattern.test(readFileSync(bookFile, 'utf8'))
 	) {
 		failures.push(
-			'docs/en/book.toml: compatibility manual title must remain "Twine compatibility manual (upstream)"'
+			`docs/en/book.toml: user manual title must be "${userManualTitle}"`
 		);
 	}
 
 	if (!existsSync(landingFile)) {
 		failures.push(
-			'docs/en/src/README.md: compatibility manual requires a scope landing page'
+			'docs/en/src/README.md: user manual requires a scope landing page'
 		);
 	} else {
 		const landing = readFileSync(landingFile, 'utf8');
@@ -271,27 +436,150 @@ export function checkCompatibilityManual({root}) {
 			].map(match => [match[1], match[2]])
 		);
 
-		if (!landing.includes(ownershipMarker)) {
+		if (!landing.includes(userManualLandingMarker)) {
 			failures.push(
-				`docs/en/src/README.md: missing compatibility ownership marker "${ownershipMarker}"`
+				`docs/en/src/README.md: missing user-manual marker "${userManualLandingMarker}"`
 			);
 		}
 
-		for (const phrase of scopePhrases) {
-			if (!normalizedLanding.includes(phrase)) {
-				failures.push(
-					`docs/en/src/README.md: missing compatibility scope phrase "${phrase}"`
-				);
-			}
+		if (!normalizedLanding.includes(userManualScopePhrase.toLowerCase())) {
+			failures.push(
+				`docs/en/src/README.md: missing user-manual scope phrase "${userManualScopePhrase}"`
+			);
 		}
 
-		for (const {label, url} of canonicalLinks) {
+		for (const {label, url} of userManualLinks) {
 			if (normalizedLinks.get(label) !== url.toLowerCase()) {
 				failures.push(
-					`docs/en/src/README.md: compatibility link "[${label}]" must target ${url}`
+					`docs/en/src/README.md: user-manual link "[${label}]" must target ${url}`
 				);
 			}
 		}
+	}
+
+	return failures;
+}
+
+export function checkUpstreamHistory({root}) {
+	const failures = [];
+
+	for (const file of filesWithExtension(
+		root,
+		'docs/en/src/release-notes',
+		'.md'
+	)) {
+		const relativeFile = relative(root, file);
+		const contents = readFileSync(file, 'utf8');
+
+		if (!contents.includes(upstreamHistoryMarker)) {
+			failures.push(
+				`${relativeFile}: missing upstream-history marker "${upstreamHistoryMarker}"`
+			);
+		}
+		if (!contents.includes(upstreamHistoryPhrase)) {
+			failures.push(
+				`${relativeFile}: missing upstream-history notice "${upstreamHistoryPhrase}"`
+			);
+		}
+	}
+
+	return failures;
+}
+
+export function checkLegacyUserManualLinks({root}) {
+	const failures = [];
+
+	for (const {source, heading, target} of legacyUserManualHeadingMap) {
+		const sourceFile = resolve(root, 'docs/user', source);
+		if (!existsSync(sourceFile)) {
+			const message = `docs/user/${source}: missing legacy guide`;
+			if (!failures.includes(message)) failures.push(message);
+			continue;
+		}
+
+		const contents = readFileSync(sourceFile, 'utf8');
+		const slug = markdownAnchorSlug(heading);
+		const headings = markdownHeadings(contents);
+		const index = headings.findIndex(item => item.slug === slug);
+		const relativeSource = `docs/user/${source}`;
+
+		if (index === -1 || headings[index].anchor !== slug) {
+			failures.push(`${relativeSource}: missing legacy heading #${slug}`);
+			continue;
+		}
+
+		const nextOffset = headings[index + 1]?.offset ?? contents.length;
+		const immediateBlock = contents
+			.slice(headings[index].offset, nextOffset)
+			.replace(/^\s+/u, '')
+			.split(/\n\s*\n/u, 1)[0];
+		const expectedTarget = `../en/src/${target}`;
+		const linkPattern = new RegExp(
+			`\\[[^\\]]*\\]\\(\\s*${expectedTarget.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}\\s*\\)`,
+			'u'
+		);
+
+		if (!linkPattern.test(immediateBlock)) {
+			failures.push(
+				`${relativeSource}: legacy heading #${slug} must immediately link to ${expectedTarget}`
+			);
+		}
+
+		const [targetPath, targetAnchor] = target.split('#', 2);
+		const destination = resolve(root, 'docs/en/src', targetPath);
+		if (!existsSync(destination)) {
+			failures.push(
+				`${relativeSource}: legacy heading #${slug} target is missing ${targetPath}`
+			);
+		} else if (
+			!markdownAnchors(readFileSync(destination, 'utf8')).has(targetAnchor)
+		) {
+			failures.push(
+				`${relativeSource}: legacy heading #${slug} target is missing anchor #${targetAnchor}`
+			);
+		}
+	}
+
+	return failures;
+}
+
+export function checkLegacyUserManualLanding({root}) {
+	const {source, heading, anchor, target} = legacyUserManualLanding;
+	const sourceFile = resolve(root, 'docs/user', source);
+	const relativeSource = `docs/user/${source}`;
+
+	if (!existsSync(sourceFile)) {
+		return [`${relativeSource}: missing legacy Help landing`];
+	}
+
+	const contents = readFileSync(sourceFile, 'utf8');
+	const failures = [];
+
+	if (
+		!markdownHeadings(contents).some(
+			item => item.slug === markdownAnchorSlug(heading)
+		) ||
+		!htmlAnchorIds(contents).has(anchor)
+	) {
+		failures.push(
+			`${relativeSource}: legacy Help landing must preserve HTML anchor #${anchor}`
+		);
+	}
+
+	const linkPattern = new RegExp(
+		`\\[[^\\]]*\\]\\(\\s*${target.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}\\s*\\)`,
+		'u'
+	);
+	if (!linkPattern.test(contents)) {
+		failures.push(
+			`${relativeSource}: legacy Help landing must link to ${target}`
+		);
+	}
+
+	if (!existsSync(resolve(dirname(sourceFile), target))) {
+		failures.push(
+			`${relativeSource}: legacy Help landing target is missing ${target}`
+		);
 	}
 
 	return failures;
@@ -375,7 +663,10 @@ export function checkDocumentation({root = repositoryRoot} = {}) {
 	const failures = [
 		...markdown.failures,
 		...html.failures,
-		...checkCompatibilityManual({root}),
+		...checkUserManual({root}),
+		...checkUpstreamHistory({root}),
+		...checkLegacyUserManualLinks({root}),
+		...checkLegacyUserManualLanding({root}),
 		...checkLegacyWorkbench({root}),
 		...checkDesignSystemGuide({root})
 	];

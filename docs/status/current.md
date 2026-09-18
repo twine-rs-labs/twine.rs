@@ -193,9 +193,11 @@ The complete local 10k and 50k benchmark runs verify:
   the ordinary edit path and in the 50k safe-refactor planning/apply path;
   performance therefore remains active until clean candidate runs pass their
   blocking gates.
-- The user manual still contains inherited Twine task and compatibility
-  chapters. Current launcher, project-folder, conflict-review, workbench,
-  asset, build, Settings, and Story Formats workflows are documented.
+- The English mdBook is the primary **Twine RS User Manual**. Its complete
+  source audit, compatibility pointers, historical appendix, and local runtime
+  validation are recorded in [the manual audit](manual-audit.md). Standalone
+  user guides preserve old links as pointers to canonical task chapters.
+  Hosted publication and CI are separate from this local migration.
 
 ## Active work
 

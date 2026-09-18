@@ -1,19 +1,15 @@
 # Combining Stories
 
-Some authors like to split large stories into smaller, individual stories.
-However, Twine isn't able to combine these stories into one published file.
-Other people in the community have created tools to do this, though they require
-using a command-line interface.
+Twine RS builds the selected story. Keeping several stories in a library or
+project folder does not automatically combine them into one playable story.
 
-- [Tweego](https://www.motoslave.net/tweego/)
-- [Extwee](https://github.com/videlais/extwee)
-- [twine-utils](https://www.npmjs.com/package/twine-utils)
+If your workflow uses external tools to combine exported sources, preserve
+separate originals and verify that the tool supports your source syntax,
+metadata, and story format. Check names, start passage, scripts, styles, and
+assets after importing or building the combined result. See
+[export formats](../publishing/publishing.md) and
+[project layouts](../story-library/location.md).
 
-These tools work with both Twine-created HTML files and plain text source code
-files, using a notation called
-[Twee](https://github.com/iftechfoundation/twine-specs/blob/master/twee-3-specification.md).
-
-If you want to have multiple, separate story files that communicate with each
-other in some way--say, for an episodic game--then how you might do that is
-specific to the story format you are using, so check its documentation for
-details.
+Connecting separate published episodes is a different task. Navigation and
+state transfer between them depend on the story format and hosting setup;
+consult that format's documentation and test the actual exported files.

@@ -4,8 +4,9 @@ Status: upstream snapshot; not twine.rs product documentation
 
 This is the original README from the TwineJS repository at the time this workspace was created.
 The preserved repository policy files remain under
-[`source/`](./source/), and the inherited mdBook is
-served from [`../en/`](../en/).
+[`source/`](./source/), and inherited authoring concepts and release history are attributed in the
+[Twine RS User Manual](../en/src/README.md). The book now describes Twine RS;
+its [release-history appendix](../en/src/release-notes/index.md) remains upstream history.
 
 ## twinejs
 

@@ -2,7 +2,8 @@
 
 Open _Settings_ from the workspace rail or choose _Preferences_ from an
 available application action toolbar. Settings are shown as a full screen, not
-a dialog. Changes take effect immediately and are remembered between sessions.
+a dialog. Settings are remembered between sessions. Some native settings, such as
+startup scheduling, take effect on the next launch.
 
 Some settings depend on the native desktop bridge. They remain visible in the
 web app so that the capability is discoverable, but are disabled when the
@@ -91,11 +92,12 @@ reload, or enable and disable an individual format.
 
 The _Integrations_ panel contains the external-editor command where supported
 and preferences for cloud save, revision control, and hosting hooks. The
-_Sharing_ panel controls story-link behavior and shows which integration hooks
-are active.
+_Sharing_ panel controls story-link behavior and reports the selected integration preferences.
 
-These settings expose integration policy; an option does not imply that an
-external service has been configured.
+Cloud, revision-control, and hosting choices are off/manual policies. They do
+not configure a cloud provider, Git remote, authentication, or automatic
+publishing. Desktop recovery folder arguments apply only to that launch and
+do not create a separate settings profile.
 
 ## Platform and About
 

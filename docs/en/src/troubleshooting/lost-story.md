@@ -39,7 +39,7 @@ Before opening a possibly damaged folder, quit Twine RS and copy the entire
 folder to a separate location, including hidden `.twine/` metadata, `twine.toml`,
 passage sources, scripts, styles, and assets. Preserve the original. Open the
 working copy using the
-[isolated recovery-library procedure](https://github.com/twine-rs-labs/twine.rs/blob/main/docs/user/recovery-and-backups.md#test-with-an-isolated-library).
+[isolated recovery-library procedure](backups.md#test-with-an-isolated-library).
 A copy retains the original's story identities, so do not open both in the same
 library. Do not treat `twine.toml` or one passage file as a complete project backup.
 

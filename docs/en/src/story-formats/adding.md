@@ -6,8 +6,8 @@ prefix like `https://` in front of it.
 
 Enter the address in the _Story format URL_ field at the top of the
 [_Story Formats_ screen](viewing.md), then choose _Add_. Twine validates and
-loads the format manifest before adding it. Any load or duplicate-version error
-is shown beside the add controls.
+loads the format manifest before adding it. Load errors are shown beside the add controls. An existing name/version is
+not added a second time.
 
 Native desktop builds also provide _From File_. Choose a local format file and
 Twine will add it after the same identity and manifest checks.

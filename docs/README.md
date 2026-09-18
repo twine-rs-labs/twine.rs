@@ -37,13 +37,17 @@ organized by the question it answers and by how its content changes over time.
 | `product/`       | Normative product behavior and vocabulary              | Avoid implementation chronology                                  |
 | `releases/`      | Reviewed release decisions and generated-record schema | Add one plan per release; generate records in CI                 |
 | `design-system/` | Design tokens, components, and visual source artifacts | Keep beside the artifacts                                        |
-| `user/`          | twine.rs-specific user documentation                   | Describe shipped behavior only                                   |
+| `user/`          | User entry index and preserved guide links             | Link to canonical task chapters in `en/src/`                     |
 | `upstream/`      | Material inherited from TwineJS                        | Never present it as twine.rs product truth                       |
 | `archive/`       | Historical research and completed plans                | Preserve context; do not maintain as current                     |
 
 Subsystem instructions stay close to their code. The root README, benchmark
 README, crate README, and localization README are intentionally not duplicated
 here.
+
+The primary English user manual lives in `en/src/`. Keep workflow prose there;
+`user/` preserves the application Help entry and old guide URLs. The manual’s
+release-history appendix is explicitly upstream history.
 
 ## Required metadata
 

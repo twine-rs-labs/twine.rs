@@ -1,3 +1,10 @@
+<!-- documentation-class: upstream-history -->
+
+> Historical upstream Twine documentation; not Twine RS release notes.
+> See [Twine RS changes](https://github.com/twine-rs-labs/twine.rs/blob/main/CHANGELOG.md).
+
+<!-- prettier-ignore-start -->
+
 # About Tweebox
 
 Tweebox was a predecessor to Twine that worked similarly to Tweego, extwee, and
@@ -194,3 +201,5 @@ There are four required tiddlers:
 
 To create a usable HTML file, the tool `twee` is used to convert the markup
 language into a playable text.
+
+<!-- prettier-ignore-end -->

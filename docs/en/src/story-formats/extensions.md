@@ -3,7 +3,7 @@
 Story formats can extend Twine by adding:
 
 - References between passages, which appear as dotted lines connecting passages
-  in the Story Map screen
+  in the story graph
 - A toolbar in passage editors
 - Syntax coloring in passage editors
 

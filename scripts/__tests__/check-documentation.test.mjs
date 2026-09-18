@@ -4,12 +4,17 @@ import {basename, join, relative} from 'node:path';
 import {tmpdir} from 'node:os';
 import {test} from 'node:test';
 import {
-	checkCompatibilityManual,
 	checkDesignSystemGuide,
 	checkDocumentation,
 	checkHtmlResources,
 	checkLegacyWorkbench,
+	checkLegacyUserManualLanding,
+	checkLegacyUserManualLinks,
+	legacyUserManualLanding,
+	legacyUserManualHeadingMap,
 	checkMarkdownFiles,
+	checkUpstreamHistory,
+	checkUserManual,
 	documentationRoots
 } from '../check-documentation.mjs';
 
@@ -23,22 +28,50 @@ function write(root, path, contents) {
 	writeFileSync(target, contents);
 }
 
-function writeValidCompatibilityManual(root) {
+function writeLegacyGuides(root) {
+	const sources = new Map();
+	const targets = new Map();
+	for (const {source, heading, target} of legacyUserManualHeadingMap) {
+		sources.set(
+			source,
+			(sources.get(source) ?? '') +
+				`## ${heading}\n\n[Read the replacement](../en/src/${target})\n\n`
+		);
+		const [path, anchor] = target.split('#');
+		targets.set(path, (targets.get(path) ?? '') + `<a id="${anchor}"></a>\n\n`);
+	}
+	for (const [path, content] of sources)
+		write(root, `docs/user/${path}`, content);
+	for (const [path, content] of targets)
+		write(root, `docs/en/src/${path}`, content);
+}
+
+function writeLegacyUserManualLanding(root) {
+	const {anchor, heading, target} = legacyUserManualLanding;
+	write(
+		root,
+		'docs/user/README.md',
+		`<a id="${anchor}"></a>\n\n# ${heading}\n\n[Twine RS User Manual](${target})`
+	);
+}
+
+function writeValidUserManual(root) {
+	writeLegacyGuides(root);
+	writeLegacyUserManualLanding(root);
 	write(
 		root,
 		'docs/en/book.toml',
-		'[book]\ntitle   =   "Twine compatibility manual (upstream)"'
+		'[book]\ntitle   =   "Twine RS User Manual"'
 	);
 	write(
 		root,
 		'docs/en/src/README.md',
 		[
-			'<!-- documentation-class: upstream-compatibility -->',
-			'> This manual is predominantly the upstream',
-			'> Twine manual. It is not yet an authoritative guide',
-			'> to every twine.rs workflow.',
-			'> See the [twine.rs documentation map](https://github.com/twine-rs-labs/twine.rs/blob/main/docs/README.md)',
-			'> and [user-documentation status](https://github.com/twine-rs-labs/twine.rs/blob/main/docs/user/README.md).'
+			'<!-- documentation-class: twine-rs-user-manual -->',
+			'> This manual describes the shipped Twine RS desktop and',
+			'> browser editors.',
+			'> See the [documentation map](https://github.com/twine-rs-labs/twine.rs/blob/main/docs/README.md)',
+			'> and [user documentation](https://github.com/twine-rs-labs/twine.rs/blob/main/docs/user/README.md).'
 		].join('\n')
 	);
 }
@@ -54,12 +87,12 @@ function writeValidDesignSystemGuide(root) {
 	);
 }
 
-test('documentation roots include the served compatibility manual', () => {
+test('documentation roots include the served user manual', () => {
 	assert.ok(documentationRoots.includes('docs/en/src'));
 	assert.ok(documentationRoots.includes('ui_kits'));
 });
 
-test('Markdown validation checks compatibility-manual links', () => {
+test('Markdown validation checks user-manual links', () => {
 	const root = fixture();
 	write(
 		root,
@@ -79,7 +112,7 @@ test('Markdown validation checks compatibility-manual links', () => {
 	]);
 });
 
-test('compatibility-manual local links cannot escape the book source', () => {
+test('user-manual local links cannot escape the book source', () => {
 	const root = fixture();
 	write(root, 'docs/README.md', '# Repository documentation');
 	write(root, 'docs/en/src/chapter.md', '[repository docs](../../README.md)');
@@ -91,7 +124,7 @@ test('compatibility-manual local links cannot escape the book source', () => {
 	});
 
 	assert.deepEqual(result.failures, [
-		'docs/en/src/chapter.md:1: local compatibility-manual link escapes docs/en/src (../../README.md); use an explicit external or repository URL'
+		'docs/en/src/chapter.md:1: local user-manual link escapes docs/en/src (../../README.md); use an explicit external or repository URL'
 	]);
 });
 
@@ -176,32 +209,87 @@ test('HTML validation ignores external and non-resource URLs', () => {
 	assert.deepEqual(checkHtmlResources({root}).failures, []);
 });
 
-test('compatibility manual accepts equivalent title spacing and scope reflow', () => {
+test('user manual accepts equivalent title spacing and scope reflow', () => {
 	const root = fixture();
-	writeValidCompatibilityManual(root);
+	writeValidUserManual(root);
 
-	assert.deepEqual(checkCompatibilityManual({root}), []);
+	assert.deepEqual(checkUserManual({root}), []);
 });
 
-test('compatibility manual requires upstream title and scope provenance', () => {
+test('user manual requires title, scope, marker, and canonical links', () => {
 	const root = fixture();
 	write(root, 'docs/en/book.toml', '[book]\ntitle = "Twine RS manual"');
 	write(root, 'docs/en/src/README.md', '# Product documentation');
 
-	const failures = checkCompatibilityManual({root});
+	const failures = checkUserManual({root});
 
-	assert.equal(failures.length, 6);
-	assert.match(failures[0], /compatibility manual title/);
-	assert.match(failures[1], /documentation-class: upstream-compatibility/);
-	assert.match(failures[2], /upstream twine/);
-	assert.match(failures[3], /not yet an authoritative guide/);
-	assert.match(failures[4], /documentation map/);
-	assert.match(failures[5], /user-documentation status/);
+	assert.equal(failures.length, 5);
+	assert.match(failures[0], /user manual title/);
+	assert.match(failures[1], /documentation-class: twine-rs-user-manual/);
+	assert.match(failures[2], /shipped Twine RS desktop and browser editors/);
+	assert.match(failures[3], /documentation map/);
+	assert.match(failures[4], /user documentation/);
+});
+
+test('upstream-history notices include unlisted release-note Markdown files', () => {
+	const root = fixture();
+	write(
+		root,
+		'docs/en/src/release-notes/twee.md',
+		'<!-- documentation-class: upstream-history -->\nHistorical upstream Twine documentation; not Twine RS release notes.'
+	);
+	write(root, 'docs/en/src/release-notes/unlisted.md', '# Unlisted');
+
+	assert.deepEqual(checkUpstreamHistory({root}), [
+		'docs/en/src/release-notes/unlisted.md: missing upstream-history marker "<!-- documentation-class: upstream-history -->"',
+		'docs/en/src/release-notes/unlisted.md: missing upstream-history notice "Historical upstream Twine documentation; not Twine RS release notes."'
+	]);
+});
+
+test('legacy recovery headings require the mapped replacement anchor', () => {
+	const root = fixture();
+	writeLegacyGuides(root);
+	write(
+		root,
+		'docs/user/recovery-and-backups.md',
+		'## Recovering from damaged settings\n\n[Read the replacement](../en/src/troubleshooting/wont-start.md#recovering-from-damaged-settings)'
+	);
+	write(root, 'docs/en/src/troubleshooting/wont-start.md', '# Troubleshooting');
+
+	assert.deepEqual(checkLegacyUserManualLinks({root}), [
+		'docs/user/recovery-and-backups.md: missing legacy heading #desktop-recovery-and-backups',
+		'docs/user/recovery-and-backups.md: missing legacy heading #story-library-and-backup-locations',
+		'docs/user/recovery-and-backups.md: missing legacy heading #restore-a-project-from-a-backup',
+		'docs/user/recovery-and-backups.md: missing legacy heading #test-with-an-isolated-library',
+		'docs/user/recovery-and-backups.md: missing legacy heading #interrupted-operations',
+		'docs/user/recovery-and-backups.md: missing legacy heading #choose-dedicated-folders',
+		'docs/user/recovery-and-backups.md: legacy heading #recovering-from-damaged-settings target is missing anchor #recovering-from-damaged-settings'
+	]);
+});
+
+test('legacy headings reject a replacement link to the wrong destination', () => {
+	const root = fixture();
+	writeLegacyGuides(root);
+	write(
+		root,
+		'docs/user/availability-and-updates.md',
+		'# Twine RS availability and updates\n\n[Read the replacement](../en/src/getting-started/updating.md#updating-twine-rs)\n\n## Updates\n\n[Read the replacement](../en/src/getting-started/updating.md#updating-twine-rs)'
+	);
+	write(
+		root,
+		'docs/en/src/getting-started/installing.md',
+		'# Installing Twine RS'
+	);
+	write(root, 'docs/en/src/getting-started/updating.md', '# Updating Twine RS');
+
+	assert.deepEqual(checkLegacyUserManualLinks({root}), [
+		'docs/user/availability-and-updates.md: legacy heading #twine-rs-availability-and-updates must immediately link to ../en/src/getting-started/installing.md#installing-twine-rs'
+	]);
 });
 
 test('documentation check rejects reintroduced legacy workbench content', () => {
 	const root = fixture();
-	writeValidCompatibilityManual(root);
+	writeValidUserManual(root);
 	writeValidDesignSystemGuide(root);
 
 	assert.deepEqual(checkLegacyWorkbench({root}), []);
@@ -221,7 +309,7 @@ test('documentation check rejects reintroduced legacy workbench content', () => 
 
 test('legacy workbench guard rejects root remediation guidance and accepts canonical guidance', () => {
 	const root = fixture();
-	writeValidCompatibilityManual(root);
+	writeValidUserManual(root);
 	writeValidDesignSystemGuide(root);
 	write(
 		root,
@@ -268,7 +356,7 @@ test('design-system guide rejects nonexistent aliases and invented imports', () 
 
 test('complete documentation check enforces design-system import guidance', () => {
 	const root = fixture();
-	writeValidCompatibilityManual(root);
+	writeValidUserManual(root);
 	write(
 		root,
 		'docs/design-system/IMPLEMENTATION_GUIDE.md',
@@ -278,5 +366,34 @@ test('complete documentation check enforces design-system import guidance', () =
 	assert.deepEqual(checkDocumentation({root}).failures, [
 		'docs/design-system/IMPLEMENTATION_GUIDE.md: production component guidance must identify src/components/design-system/index.ts as the real barrel',
 		'docs/design-system/IMPLEMENTATION_GUIDE.md: production component guidance must show a relative components/design-system import'
+	]);
+});
+
+test('legacy guide links resolve into the served manual and cannot disappear', () => {
+	const root = fixture();
+	writeLegacyGuides(root);
+	assert.deepEqual(checkLegacyUserManualLinks({root}), []);
+	assert.deepEqual(
+		checkMarkdownFiles({root, roots: ['docs/user'], currentDirectories: []})
+			.failures,
+		[]
+	);
+	assert.equal(checkLegacyUserManualLinks({root: fixture()}).length, 4);
+});
+
+test('legacy Help landing preserves its explicit anchor and manual destination', () => {
+	const root = fixture();
+	write(root, 'docs/en/src/README.md', '# Twine RS User Manual');
+	writeLegacyUserManualLanding(root);
+
+	assert.deepEqual(checkLegacyUserManualLanding({root}), []);
+
+	write(
+		root,
+		'docs/user/README.md',
+		'# Twine RS user documentation\n\n[Twine RS User Manual](../en/src/README.md)'
+	);
+	assert.deepEqual(checkLegacyUserManualLanding({root}), [
+		'docs/user/README.md: legacy Help landing must preserve HTML anchor #twiners-user-documentation'
 	]);
 });

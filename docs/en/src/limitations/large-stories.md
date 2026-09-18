@@ -1,21 +1,23 @@
 # Large Stories
 
-Twine doesn't set any hard limit on how big a single story can be, whether on
-number of passages, amount of text, or number of links.
+There is no single passage count at which a project is guaranteed to remain
+responsive. Text size, links, assets, chosen format, filesystem, available
+memory, and the current tool all affect cost. Large-project latency and memory
+remain known limitations; historical benchmarks are not promises for your
+machine or story.
 
-If you're using browser Twine, you are limited by the amount of storage space
-your browser allows Twine. You can see the amount of space available as a
-percentage in the corner of the Story Library screen.
+Test a representative copy before committing to a very large project. On the
+desktop, **Multi** layout separates passage source files and often makes
+external editing and source-control changes easier to inspect. It is not an
+automatic performance fix or a conversion option for an existing project.
 
-If you're using app Twine, you're limited by the amount of space on your
-computer, but you're very unlikely to be limited by this in practice.
+Browser projects also depend on the storage quota and retention rules of the
+current profile and origin. Keep exported backups; do not use a storage
+indicator as a guarantee that future writes will succeed. Desktop projects
+need sufficient disk space for sources, assets, backups, and preview copies.
 
-However, you may notice Twine slowing down while editing a large story. Exactly
-when this becomes evident depends on many things: how powerful your computer is,
-how large the Twine window onscreen is (drawing more of the Story Map screen at
-one time takes more resources, of course), how you've arranged your story, and
-more. As a result, it's hard to advise specific actions if you notice that Twine
-is sluggish with your story.
-
-One possibility, though, is to [split your story](./combining.md) into multiple
-stories.
+Use the Text view when you do not need the graph, and request large aggregate
+views only when needed. If a workflow is consistently slow, report the app
+version, platform, approximate project size, and reproduction steps without
+publishing private story content. Splitting work into separate stories changes
+the publishing workflow; read [Combining Stories](combining.md) first.
