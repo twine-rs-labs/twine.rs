@@ -1,6 +1,6 @@
 # The Scratch Folder
 
-This page only applies to app Twine.
+This page only applies to Twine RS desktop.
 
 When you test, play, or proof a story, the desktop app creates a bounded
 temporary package in its _scratch folder_ and opens it in a dedicated Twine

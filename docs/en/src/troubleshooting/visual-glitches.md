@@ -1,8 +1,8 @@
 # If You See Visual Glitches in Twine
 
-This page only applies to app Twine.
+This page only applies to Twine RS desktop.
 
-If you see visual glitches often in Twine, turning off hardware accleration may
+If you see visual glitches often in Twine, turning off hardware acceleration may
 help. You should only do this if you are seeing a problem. As the name implies,
 using hardware acceleration speeds up Twine's display.
 

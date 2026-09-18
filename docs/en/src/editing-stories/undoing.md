@@ -1,16 +1,22 @@
 # Undoing and Redoing
 
-In the top corner of the Story Map top toolbar, there are buttons that undo and redo
-actions you take. Undo reverses the last action you took; redo redoes actions
-you undid. Twine tracks all actions you take editing a story, so you can undo
-multiple actions in a row.
+Twine RS has two related histories:
 
-The undo and redo buttons in the top toolbar don't affect text changes you make
-in an individual passages. There are separate undo and redo buttons in each
-passage editing dialog that manage your editing history there.
+- **Focused source editor:** while typing in a passage, Story JavaScript, or
+  Story Stylesheet buffer, use that editor's Undo/Redo keyboard commands.
+  Each open buffer keeps its own text-editing history.
+- **Project history:** use the application Undo/Redo controls or command
+  palette for project changes, such as passage creation/deletion, moves,
+  reviewed renames, Find/Replace, and accepted external changes. With focus
+  outside editable controls, Command/Ctrl+Z invokes project Undo;
+  Command/Ctrl+Shift+Z invokes Redo (Ctrl+Y is also supported).
 
-When you leave the Story Map screen, either going to a different screen in Twine
-or closing the application entirely, your undo history is discarded.
+The project controls describe the available operation and are disabled when
+there is nothing to undo or redo. A reviewed multi-source replacement or
+rename applies as one project transaction, so its project Undo restores the
+accepted changes together.
 
-If the undo or redo button is disabled, that's because there's nothing to undo
-or redo yet.
+Switching between Text, Graph, and Split is not a reason to assume history was
+cleared. History belongs to the live editing/project session; do not rely on
+it surviving application restart, project replacement, or a recovery reload.
+Undo is not a substitute for a separate backup.

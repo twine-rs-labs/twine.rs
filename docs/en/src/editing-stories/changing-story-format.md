@@ -1,8 +1,9 @@
 # Changing the Story Format
 
-To change a story's story format, choose _Details_ from the _Story_ top toolbar
-tab. There's a menu in the dialog that opens that allows you to set a different
-format.
+In the workbench, choose the **Story** action tab, then **Details**. In the
+Details panel, choose an installed format and version in **Story Format**.
+Formats must be [installed](../story-formats/adding.md) before they appear here.
 
-Story formats must be [installed in Twine](../story-formats/adding.md) before
-they appear in this menu.
+Changing the format does not translate passage syntax, variables, JavaScript,
+or styles. Preserve a backup and test your story after changing it. The format
+for this story is separate from the default used for new projects.

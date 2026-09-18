@@ -7,5 +7,4 @@ You can also choose the default format from the _Story Formats_ panel in
 
 Changing the default story format doesn't affect stories you've already created,
 only new ones you create in the future. You [can change the story format for
-existing stories](../editing-stories/changing-story-format.md) in the Story Map
-or workbench.
+existing stories](../editing-stories/changing-story-format.md) in the workbench.

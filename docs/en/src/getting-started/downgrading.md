@@ -28,7 +28,7 @@ both your current data and the pre-upgrade backup before changing versions.
    separately. Do not merge old and new project directories or assume that a
    settings reset converts project data.
 5. Test a separate copy of a known-good project using the
-   [isolated recovery-library procedure](https://github.com/twine-rs-labs/twine.rs/blob/main/docs/user/recovery-and-backups.md#test-with-an-isolated-library).
+   [isolated recovery-library procedure](../troubleshooting/backups.md#test-with-an-isolated-library).
    Check that the selected older release supports those command-line options
    before launching it. Check the project's passages, start
    passage, story format/version, scripts, stylesheet, assets, and Play/Test.

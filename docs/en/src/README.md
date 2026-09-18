@@ -1,72 +1,55 @@
-# Hello!
+# Twine RS User Manual
 
-<!-- documentation-class: upstream-compatibility -->
+<!-- documentation-class: twine-rs-user-manual -->
 
-> **Documentation scope:** this mdBook is predominantly the upstream Twine
-> manual retained for compatibility and general authoring concepts. It is not
-> yet an authoritative guide to every twine.rs workflow. The application shell,
-> project launcher, project-folder and conflict workflow, passage editor,
-> assets, Build & Export, Settings, and Story Formats chapters describe the
-> current interface. Other inherited task chapters and the upstream release
-> notes are still being separated from twine.rs-specific documentation. See the
-> [twine.rs documentation map](https://github.com/twine-rs-labs/twine.rs/blob/main/docs/README.md)
-> and
-> [user-documentation status](https://github.com/twine-rs-labs/twine.rs/blob/main/docs/user/README.md).
+This manual describes the shipped Twine RS desktop and browser editors.
+It was checked against the `0.2.0-beta.6` source tree at `ee12429e`.
+Twine RS remains prerelease software. Platform-specific validation and known
+limits are recorded in the [manual audit](https://github.com/twine-rs-labs/twine.rs/blob/main/docs/status/manual-audit.md).
 
-This is a reference guide for the Twine editor. It describes Twine's user
-interface and introduces the larger ecosystem that surrounds it. If you've never
-built anything with Twine before, this will guide through the basics and point
-you to resources that will help continue to learn.
+Start with [installation](getting-started/installing.md), then
+[create your first story](getting-started/first-story.md). Use the sidebar or
+search to find a task. The [interface guide](getting-started/getting-around.md)
+explains the workspace rail, action tabs, and command palette.
 
-You don't need any previous programming or game-making experience to be
-successful with Twine. These elements can be gradually introduced into the
-things you make as you grow more comfortable with the application.
+The desktop app saves directory-backed projects and can watch external edits.
+The browser editor stores its library in the current browser profile and
+origin. It does not have desktop filesystem access or scheduled library
+backups. Read [storage and folders](story-library/location.md) and
+[backups](troubleshooting/backups.md) before relying on either storage mode.
 
 ## What Is Twine Good At?
 
-- **Text-based storytelling**. Twine is very text-focused, though you can use
-  images, sound, and video.
-
-- **Branching narratives**. Twine's user interface is designed to make
-  it easy to visualize the flow through branches of a narrative.
-
-- **Web-based publishing**. Twine publishes to HTML files which can be uploaded
-  on any web hosting service or shared privately. People can play the things you
-  make without installing any extra software.
+Twine RS edits interactive stories built from passages connected by links.
+You can write branching fiction, tutorials, dialogue, and other text-led work.
+Exported playable HTML is opened by players in a browser; they do not need
+Twine RS installed.
 
 ## What Is Twine Bad At?
 
-This is especially difficult to define, because authors are so ingenious and
-constantly push at the boundaries of what is possible. Because Twine is deeply
-enmeshed with the web platform, anything that can be done in a browser can be
-done with Twine--but you might be better-served using a different tool.
-
-- **Heavy use of multimedia.** It's possible to incorporate images, sound, and
-  video into the things you create with Twine, but the workflow can feel
-  awkward, especially if you are using lots of multimedia assets. You might be
-  happier using a tool like [Ren'Py](https://www.renpy.org).
-
-- **Online and multiplayer play.** There have been experiments with making Twine
-  games that are playable by multiple people simultaneously, but doing so
-  requires a good deal of programming knowledge. There have not been many modern
-  successors to the [MUD](https://en.wikipedia.org/wiki/Multi-user_dungeon) model, but
-  [Seltani](http://seltani.net) is one.
-
-- **Works that involve a world model, or that use interaction models other than
-  clicking links, like a text parser or a graphical world.**
-  [Inform](http://inform7.com) or [Bitsy](http://www.bitsy.org), for example,
-  might be better fits for these.
-
-See [Limitations](limitations/index.md) for more details on some of the above and some possible ways
-to work around these issues.
+Story formats determine presentation, multimedia, variables, and game logic.
+Twine RS does not provide collaborative live editing, an operated cloud-save
+service, or automatic online publication. See [limitations](limitations/index.md)
+and [Build & Export](publishing/publishing.md) for the actual boundaries.
 
 ## See Also...
 
-In order to use Twine most effectively, you should spend some time reading the documentation for the story format you're using. ([Wait, what's a story format?](getting-started/basic-concepts.html#story-formats))
+For story-language syntax, use your selected format's documentation:
+[Harlowe](https://twine2.neocities.org/),
+[Chapbook](https://klembot.github.io/chapbook/guide/),
+[SugarCube](https://www.motoslave.net/sugarcube/2/), or
+[Snowman](https://videlais.github.io/snowman/2/).
+Changing the format does not translate your story's code.
 
-- [Chapbook](http://klembot.github.io/chapbook/guide/)
-- [Harlowe](https://twine2.neocities.org)
-- [Snowman](https://videlais.github.io/snowman/2/)
-- [SugarCube](http://www.motoslave.net/sugarcube/2/)
+This manual retains authoring concepts and historical material from upstream
+Twine/TwineJS, a separate product. The
+[upstream release-history appendix](release-notes/index.md) is historical;
+[Twine RS changes](https://github.com/twine-rs-labs/twine.rs/blob/main/CHANGELOG.md)
+and [downloads](https://github.com/twine-rs-labs/twine.rs/releases) belong to this project.
+For repository documentation, use the
+[documentation map](https://github.com/twine-rs-labs/twine.rs/blob/main/docs/README.md)
+or the [user documentation](https://github.com/twine-rs-labs/twine.rs/blob/main/docs/user/README.md).
 
-You might also find the [Twine Cookbook](https://twinery.org/cookbook) useful to read. It contains example code and explanations for things Twine authors often want to do.
+<!-- Preserved section links from the previous manual. -->
+
+<a id="hello"></a>

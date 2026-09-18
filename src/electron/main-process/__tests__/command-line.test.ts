@@ -53,7 +53,7 @@ describe('command-line helpers', () => {
 	it('keeps the canonical desktop guide aligned with help and package names', () => {
 		const repositoryRoot = resolve(__dirname, '../../../..');
 		const guide = readFileSync(
-			resolve(repositoryRoot, 'docs/user/desktop-command-line.md'),
+			resolve(repositoryRoot, 'docs/en/src/customizing/command-line.md'),
 			'utf8'
 		);
 		const platformDecision = readFileSync(

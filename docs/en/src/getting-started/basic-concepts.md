@@ -78,21 +78,18 @@ Twine includes four story formats when you download it, and it is possible to
 [add other story formats](../story-formats/adding.md) that people in the
 community have made.
 
-- [**Chapbook**](https://klembot.github.io/chapbook/) is the youngest story
-  format. It's designed to be easy to learn and to make many common tasks people
+- [**Chapbook**](https://klembot.github.io/chapbook/) is designed to be easy to learn and to make many common tasks people
   have when creating with Twine as simple as possible.
 
 - [**Harlowe**](https://twine2.neocities.org) is the default story format for
-  Twine. It offers a lightweight but versatile programming language. As the
+  new Twine RS preferences. It offers a lightweight but versatile programming language. As the
   default, it also has a large community of authors who use it.
 
 - [**Snowman**](https://videlais.github.io/snowman/) is a minimal story format
   designed for people who are familiar with web development technologies like
   CSS and JavaScript, and prioritize customization.
 
-- [**SugarCube**](https://www.motoslave.net/sugarcube/2/) is the oldest story
-  format of these, and as a result, has the largest community and resources to
-  draw on. It offers extensive customization possibilities.
+- [**SugarCube**](https://www.motoslave.net/sugarcube/2/) offers extensive customization possibilities.
 
 Changing the story format you use can be a time-consuming process because they
 vary so much in their approach. Because of this, the number of story formats to

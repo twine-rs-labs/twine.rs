@@ -123,7 +123,7 @@ test('quality CI routes explicit safe changes and preserves a stable fail-closed
 	);
 	assert.match(
 		lightweight,
-		/name: Build compatibility manual\n\s+if: needs\.classify\.outputs\.quality_mode == 'docs'/
+		/name: Build Twine RS User Manual\n\s+if: needs\.classify\.outputs\.quality_mode == 'docs'/
 	);
 	assert.match(
 		job(source, 'classify'),

@@ -40,14 +40,6 @@ Source of truth: unfinished primary-product behavior
   are no longer product paths.
 - Keep compatibility readers only where interchange requires them.
 
-### User documentation
-
-- Audit remaining inherited editing, troubleshooting, installation, and
-  compatibility chapters for obsolete screen instructions.
-- Separate general Twine/story-format concepts from application-specific
-  instructions.
-- Maintain Twine RS release notes independently of the upstream Twine history.
-
 ## Exit criteria
 
 - Primary workflows do not open legacy editor or settings surfaces.
@@ -57,4 +49,3 @@ Source of truth: unfinished primary-product behavior
 - Desktop Build either embeds every supported referenced medium or reports why
   it remains external; browser mode cannot imply that capability.
 - Persisted product mutations pass the core-boundary guard.
-- The served user manual describes the current twine.rs UI.

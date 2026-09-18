@@ -1,5 +1,5 @@
 [book]
-title = "Twine compatibility manual (upstream)"
+title = "Twine RS User Manual"
 
 [output.html]
 additional-css = ["custom.css"]

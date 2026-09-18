@@ -2,55 +2,30 @@
 
 ## CSS
 
-App Twine allows advanced customization its interface by creating a special
-file, `user.css`, in your Twine folder. You'll need to create this file outside
-of Twine using a text editor.
+The desktop app can load a user stylesheet from the operating system's
+Documents folder, inside **Twine RS**. In English the filename is `user.css`;
+other locales can localize that filename. The location is independent of any
+custom story-library, backup, or scratch folder.
 
-If `user.css` exists, then app Twine will add the contents of it to the UI as
-CSS rules, potentially overriding the default styling. CSS allows changing the
-appearance of the application--using different fonts, for example, or
-colors--but does not allow changing Twine's functionality or adding new
-features.
+Create or edit this file with an external text editor. Keep a copy and start
+with a small reversible rule. The stylesheet changes the authoring app, not
+published stories; use [Story Stylesheet](../editing-stories/js-and-css.md) for
+player-facing CSS.
 
-Here's a sample `user.css` that replaces the graph paper background of the story
-map with a plain gray color:
+For example, the inspected workbench's graph background can be changed with:
 
 ```css
-.passage-map {
-  background: hsl(0, 0%, 75%) !important;
-}
-
-[data-app-theme="dark"] .passage-map {
-  background: hsl(0, 0%, 30%) !important;
+.story-edit-route .passage-map {
+	background: #30343b !important;
 }
 ```
 
-`user.css` is only available in app Twine. If you'd like to customize browser
-Twine using CSS, browser extensions like
-[Stylus](https://github.com/openstyles/stylus/wiki) might help.
+Quit and restart Twine RS to load a changed stylesheet. If it makes the app hard
+to use, quit, rename the stylesheet, and relaunch. Missing or unreadable user
+CSS does not prevent startup; an unreadable file is logged and skipped.
 
-Some important things to keep in mind working with `user.css`:
-
-- **The structure of Twine's UI can and will change on every release, even for
-  patch-level version changes.** Because these changes are often numerous, they
-  will not be part of release notes.
-- The file must named exactly `user.css`--all lowercase. `User.css` will not
-  work.
-- Changes to `user.css` will take effect the next time you start Twine.
-- To determine what [CSS
-  selectors](https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Selectors) to
-  use, you can either use developer tools in browser Twine--the DOM structure is
-  identical between browser Twine and app Twine--or open developer tools in
-  Twine itself by going to _Troubleshooting_ under the _Help_ menu, then
-  choosing _Show Debug Console_.
-- You can use the in-app debug console to test your CSS rules. The rules you set
-  in `user.css` will be listed as _injected stylesheet_ in the developer
-  console.
-- `user.css` must be at the same folder level as your `Stories` and `Backups`
-  folders, directly below the `Twine` folder.
-- If there's a problem loading `user.css`, Twine will load as normal and not
-  apply any customizations. If any of your CSS rules are incorrectly written,
-  they will be ignored. Twine will not show a warning in any of these cases.
-- In order for `user.css` to [win
-  specificity](https://developer.mozilla.org/en-US/docs/Web/CSS/Specificity),
-  you might need to add `!important` to the end of your declarations.
+Selectors and UI structure can change between versions. Inspect the exact
+installed app with **Help > Troubleshooting > Show Debug Console** when
+checking a selector. Do not assume the upstream Twine interface or another
+browser build has identical markup. This desktop file mechanism is not a
+browser-editor feature.

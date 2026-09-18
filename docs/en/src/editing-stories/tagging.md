@@ -1,35 +1,23 @@
 # Tagging Passages
 
-Passages can be tagged just like stories, and in a similar fashion, passage tags
-mostly exist to help you organize your story. Passage tags don't typically
-change a passage's behavior when played, but often story formats make tags
-accessible to code you write. As example, you could change the appearance of
-your story when the player reaches a passage tagged `night`. You should consult
-your story format's documentation for details on how this works.
-
-Twine automatically assigns a color to a tag when you create it, but you can
-change it to whatever you like, or remove the color entirely.
-
-If a tag is assigned a color, a stripe of that color will appear at the top of
-each passage card that has that tag, and the passage editing dialog will show it
-on the left side of its title bar. Tags will also be listed in a [passage edit
-dialog's _Tag_ button](editing-passages.md) regardless of color.
+Passage tags organize a story and can have meanings defined by its story
+format. Check that format's documentation before renaming or removing tags
+used by story code. Passage tags are separate from library-level
+[story tags](../story-library/tagging.md).
 
 ## Adding Tags
 
-To add a tag to a passage, [edit it](editing-passages.md) and choose the _Tag_
-button. As you type, the text field in this dialog will autocomplete tags you've
-previously added to other passages in the story.
+Open the passage editor and use its tag control. Enter a tag name or choose an
+existing tag suggested by the control. Tag colors help distinguish passages in
+the editor and graph; the presentation also depends on the tag-display setting.
 
 ## Renaming Tags and Changing the Color of Tags
 
-To rename a passage tag, choose _Passage Tags_ from the _Story_ top toolbar tab.
-In this dialog, you can rename a tag or change its color.
-
-The color of an an individual tag can also be changed in the [passage edit
-dialog](editing-passages.md) of a passage that has that tag.
+Choose **Story > Passage Tags** to open the workbench tag panel. Rename a tag or
+change its color there. Renaming affects its uses across the current story.
+The passage editor's tag control also offers color choices.
 
 ## Removing Tags
 
-To remove a tag from a passage, [edit it](editing-passages.md), then select the
-tag you want to remove. Finally, choose _Remove_ from the dropdown menu.
+Open the passage editor's tag control, select the tag, and choose **Remove**.
+Review any format-specific behavior that depended on that tag.

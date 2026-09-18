@@ -84,7 +84,7 @@ jobs:
         run: npm run test:ci
       - name: Lint and documentation checks
         run: npm run lint
-      - name: Build compatibility manual
+      - name: Build Twine RS User Manual
         run: npm run build:docs
       - name: Formatting
         run: npm run format:check
@@ -165,7 +165,7 @@ jobs:
       - name: Documentation checks
         if: needs.classify.outputs.quality_mode == 'docs'
         run: npm run check:docs
-      - name: Build compatibility manual
+      - name: Build Twine RS User Manual
         if: needs.classify.outputs.quality_mode == 'docs'
         run: npm run build:docs
 
